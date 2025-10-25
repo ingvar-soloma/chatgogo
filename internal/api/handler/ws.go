@@ -4,6 +4,9 @@ import (
 	"chatgogo/backend/internal/chathub"
 	"chatgogo/backend/internal/models"
 	"net/http"
+
+	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 )
 
 var upgrader = websocket.Upgrader{
@@ -16,7 +19,19 @@ var upgrader = websocket.Upgrader{
 // ServeWebSocket оновлює HTTP-з'єднання до WebSocket
 func (h *Handler) ServeWebSocket(c *gin.Context) {
 	// 1. Отримати AnonID з JWT (опускаємо логіку перевірки токена)
-	anonID := c.Query("anon_id") // У реальному коді: перевірка JWT
+	authHeader := c.GetHeader("Authorization")
+	if authHeader == "" || len(authHeader) < 7 || authHeader[:7] != "Bearer " {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Authorization token missing"})
+		return
+	}
+	tokenString := authHeader[7:]
+
+	// 2. Валідація та отримання AnonID з JWT
+	anonID, err := h.validateAndGetAnonID(tokenString)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token or expired"})
+		return
+	}
 
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -24,20 +39,19 @@ func (h *Handler) ServeWebSocket(c *gin.Context) {
 		return
 	}
 
-	// 2. Створення нового клієнта
+	// 1. Створення нового клієнта
 	client := &chathub.Client{
+		Hub:    h.Hub, // Додано посилання на Hub
 		AnonID: anonID,
-		Send:   make(chan models.ChatMessage, 256), // Буфер для повідомлень
-		// ... зберігання самого conn
+		Conn:   conn, // Збереження з'єднання
+		Send:   make(chan models.ChatMessage, 256),
 	}
 
-	// 3. Реєстрація клієнта в Chat Hub
+	// 2. Реєстрація клієнта в Chat Hub
 	h.Hub.RegisterCh <- client
 
-	// 4. Запуск окремих Goroutines для читання/запису
-	go client.ReadPump(conn, h.Hub) // Створюємо окрему Goroutine для читання
-	go client.WritePump(conn)       // Створюємо окрему Goroutine для запису
-
-	// NOTE: Функції ReadPump та WritePump повинні обробляти нескінченний цикл
-	// читання/запису та відправляти дані в Hub.IncomingCh.
+	// 3. Запуск окремих Goroutines
+	// ReadPump і WritePump будуть обробляти з'єднання, поки воно не розірветься.
+	go client.WritePump()
+	go client.ReadPump()
 }
