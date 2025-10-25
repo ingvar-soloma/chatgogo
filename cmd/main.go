@@ -10,14 +10,41 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
 // Ця функція імітує ініціалізацію DB та Redis (потрібно буде реалізувати)
 func setupDependencies() (*gorm.DB, *redis.Client) {
-	// NOTE: Реалізуйте тут реальне підключення до PostgreSQL та Redis
-	log.Println("Initializing mock DB and Redis connections...")
-	return &gorm.DB{}, &redis.Client{} // Повертаємо заглушки для тесту
+	// 1. PostgreSQL (Використовуємо дані з docker-compose)
+	dsn := "host=localhost user=user password=password dbname=chatgogodb port=5432 sslmode=disable"
+
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		log.Fatalf("Failed to connect PostgreSQL: %v", err)
+	}
+
+	// 2. Redis
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6380",
+		Password: "",
+		DB:       0,
+	})
+
+	// Перевірка з'єднання Redis
+	if _, err := rdb.Ping(rdb.Context()).Result(); err != nil {
+		log.Fatalf("Failed to connect Redis: %v", err)
+	}
+
+	// 3. Міграції (Створення таблиць)
+	// ВАЖЛИВО: Потрібно імпортувати всі моделі з internal/models
+	// err = db.AutoMigrate(&models.User{}, &models.ChatRoom{}, &models.Complaint{})
+	// if err != nil {
+	//     log.Fatalf("Failed to run migrations: %v", err)
+	// }
+
+	log.Println("Database and Redis connections established.")
+	return db, rdb
 }
 
 func main() {

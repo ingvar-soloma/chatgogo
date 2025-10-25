@@ -61,7 +61,7 @@ func (m *MatcherService) Run() {
 // findMatch намагається знайти співрозмовника для даного запиту (req)
 func (m *MatcherService) findMatch(req models.SearchRequest) {
 	// 1. Пошук потенційних кандидатів у черзі
-	for targetID, targetReq := range m.Queue {
+	for targetID := range m.Queue {
 		// Не шукати пару із самим собою
 		if targetID == req.UserID {
 			continue
