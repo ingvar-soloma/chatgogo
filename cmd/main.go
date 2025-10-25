@@ -3,13 +3,15 @@ package main
 import (
 	"chatgogo/backend/internal/api/handler"
 	"chatgogo/backend/internal/chathub"
+	"chatgogo/backend/internal/models"
 	"chatgogo/backend/internal/storage"
+	"context"
 	"log"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -32,18 +34,24 @@ func setupDependencies() (*gorm.DB, *redis.Client) {
 	})
 
 	// Перевірка з'єднання Redis
-	if _, err := rdb.Ping(rdb.Context()).Result(); err != nil {
+	ctx := context.Background()
+	if _, err := rdb.Ping(ctx).Result(); err != nil {
 		log.Fatalf("Failed to connect Redis: %v", err)
 	}
 
 	// 3. Міграції (Створення таблиць)
 	// ВАЖЛИВО: Потрібно імпортувати всі моделі з internal/models
-	// err = db.AutoMigrate(&models.User{}, &models.ChatRoom{}, &models.Complaint{})
-	// if err != nil {
-	//     log.Fatalf("Failed to run migrations: %v", err)
-	// }
+	err = db.AutoMigrate(
+		&models.ChatRoom{},
+		&models.User{}, // Додайте всі моделі, які ви використовуєте
+		// &models.Complaint{},
+	)
+	if err != nil {
+		// Якщо міграція не спрацювала, зупиняємо додаток
+		log.Fatalf("Failed to run migrations: %v", err)
+	}
 
-	log.Println("Database and Redis connections established.")
+	log.Println("Database and Redis connections established, migrations complete.")
 	return db, rdb
 }
 

@@ -76,7 +76,6 @@ func (c *Client) WritePump() {
 				continue
 			}
 
-			// Виправлення: c.Conn.NextWriter замість c.conn.NextWriter
 			w, err := c.Conn.NextWriter(websocket.TextMessage)
 			if err != nil {
 				return

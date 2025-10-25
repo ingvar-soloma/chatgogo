@@ -32,21 +32,20 @@ type Client struct {
 type ManagerService struct {
 	Clients map[string]*Client
 
-	// Channels... (залишаємо як було)
+	// Channels
 	IncomingCh     chan models.ChatMessage
 	MatchRequestCh chan models.SearchRequest
 	RegisterCh     chan *Client
 	UnregisterCh   chan *Client
 
-	Storage storage.Storage
+	Storage *storage.Service
 	Conn    *websocket.Conn
 
-	// Новий компонент: PubSub канал для доставки повідомлень
 	pubSubChannel chan models.ChatMessage
 }
 
 // NewManagerService (ініціалізація нового каналу)
-func NewManagerService(s storage.Storage) *ManagerService {
+func NewManagerService(s *storage.Service) *ManagerService {
 	return &ManagerService{
 		Clients:        make(map[string]*Client),
 		IncomingCh:     make(chan models.ChatMessage),
