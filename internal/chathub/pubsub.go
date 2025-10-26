@@ -40,12 +40,12 @@ func (m *ManagerService) StartPubSubListener() {
 
 			// ... (3. РОЗСИЛКА КЛІЄНТАМ)
 			for _, client := range m.Clients {
-				if client.RoomID == msg.Channel {
+				if client.GetRoomID() == msg.Channel {
 					select {
-					case client.Send <- chatMsg:
+					case client.GetSendChannel() <- chatMsg:
 						// OK
 					default:
-						log.Printf("WARNING: Client %s send channel full. Closing connection.", client.AnonID)
+						log.Printf("WARNING: Client %s send channel full. Closing connection.", client.GetAnonID())
 						// Реалізація безпечного відключення
 						// delete(m.Clients, client.AnonID)
 						// close(client.Send)
@@ -67,16 +67,16 @@ func (m *ManagerService) Run() {
 		select {
 		case client := <-m.RegisterCh:
 			// Новий клієнт підключився (WebSocket/TG)
-			m.Clients[client.AnonID] = client
-			log.Printf("Client registered: %s", client.AnonID)
+			m.Clients[client.GetAnonID()] = client
+			log.Printf("Client registered: %s", client.GetAnonID())
 
 		case client := <-m.UnregisterCh:
 			// Клієнт відключився
-			if _, ok := m.Clients[client.AnonID]; ok {
-				delete(m.Clients, client.AnonID)
-				close(client.Send) // Закриваємо канал, щоб WritePump завершилася
+			if _, ok := m.Clients[client.GetAnonID()]; ok {
+				delete(m.Clients, client.GetAnonID())
+				client.Close() // Закриваємо канал, щоб WritePump завершилася
 				// ! Логіка розриву кімнати !
-				log.Printf("Client unregistered: %s", client.AnonID)
+				log.Printf("Client unregistered: %s", client.GetAnonID())
 			}
 
 		case req := <-m.MatchRequestCh:

@@ -40,7 +40,7 @@ func (h *Handler) ServeWebSocket(c *gin.Context) {
 	}
 
 	// 1. Створення нового клієнта
-	client := &chathub.Client{
+	client := &chathub.WebSocketClient{
 		Hub:    h.Hub, // Додано посилання на Hub
 		AnonID: anonID,
 		Conn:   conn, // Збереження з'єднання
@@ -50,8 +50,7 @@ func (h *Handler) ServeWebSocket(c *gin.Context) {
 	// 2. Реєстрація клієнта в Chat Hub
 	h.Hub.RegisterCh <- client
 
-	// 3. Запуск окремих Goroutines
-	// ReadPump і WritePump будуть обробляти з'єднання, поки воно не розірветься.
-	go client.WritePump()
-	go client.ReadPump()
+	// 3. Запуск клієнта (це замінює старі виклики WritePump/ReadPump)
+	// client.Run() сам запустить необхідні goroutines
+	client.Run()
 }

@@ -9,12 +9,49 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// ReadPump читає повідомлення з WebSocket і передає їх у ChatHub.
-func (c *Client) ReadPump() {
+// Константи, які були в manager.go або client_pump.go
+const (
+	writeWait      = 10 * time.Second
+	pongWait       = 60 * time.Second
+	pingPeriod     = (pongWait * 9) / 10
+	maxMessageSize = 512
+)
+
+// WebSocketClient реалізує інтерфейс chathub.Client
+type WebSocketClient struct {
+	AnonID string
+	RoomID string
+	Conn   *websocket.Conn
+	Hub    *ManagerService
+	Send   chan models.ChatMessage
+}
+
+// --- Реалізація методів інтерфейсу ---
+
+func (c *WebSocketClient) GetAnonID() string                         { return c.AnonID }
+func (c *WebSocketClient) GetRoomID() string                         { return c.RoomID }
+func (c *WebSocketClient) SetRoomID(id string)                       { c.RoomID = id }
+func (c *WebSocketClient) GetSendChannel() chan<- models.ChatMessage { return c.Send }
+
+// Run запускає 'pumps' для WebSocket
+func (c *WebSocketClient) Run() {
+	go c.writePump()
+	go c.readPump()
+}
+
+// Close закриває Send канал (що зупинить writePump)
+func (c *WebSocketClient) Close() {
+	close(c.Send)
+	// readPump зупиниться сам, коли Conn.Close() буде викликано в його defer
+}
+
+// --- Логіка 'Pump' (перейменовані ReadPump/WritePump) ---
+
+func (c *WebSocketClient) readPump() {
 	// Встановлення таймаутів та обробка закриття з'єднання
 	defer func() {
 		c.Hub.UnregisterCh <- c // Надсилаємо команду на Unregister
-		c.Conn.Close()          // Використовуємо експортоване поле Conn
+		c.Conn.Close()
 	}()
 
 	c.Conn.SetReadLimit(maxMessageSize)
@@ -34,10 +71,8 @@ func (c *Client) ReadPump() {
 			break
 		}
 
-		// Тут буде логіка декодування JSON та надсилання у Hub.IncomingCh
 		var msg models.ChatMessage
 
-		// !!! Додамо декодування JSON (критично важливий крок) !!!
 		if err := json.Unmarshal(message, &msg); err != nil {
 			log.Printf("Error decoding JSON from client %s: %v", c.AnonID, err)
 			continue // Пропускаємо невірне повідомлення
@@ -50,13 +85,13 @@ func (c *Client) ReadPump() {
 	}
 }
 
-// WritePump читає повідомлення з каналу Send і записує їх у WebSocket.
-func (c *Client) WritePump() {
+// writePump (маленька 'w') читає повідомлення з каналу Send і записує їх у WebSocket.
+func (c *WebSocketClient) writePump() {
 	ticker := time.NewTicker(pingPeriod)
 
 	defer func() {
 		ticker.Stop()
-		c.Conn.Close() // Використовуємо експортоване поле Conn
+		c.Conn.Close()
 	}()
 
 	for {
@@ -69,7 +104,6 @@ func (c *Client) WritePump() {
 				return
 			}
 
-			// !!! Кодування JSON для відправки !!!
 			dataToWrite, err := json.Marshal(message)
 			if err != nil {
 				log.Printf("Error encoding JSON for client %s: %v", c.AnonID, err)
@@ -86,8 +120,6 @@ func (c *Client) WritePump() {
 			n := len(c.Send)
 			for i := 0; i < n; i++ {
 				nextMsg := <-c.Send
-
-				// Кодування додаткових повідомлень
 				extraData, _ := json.Marshal(nextMsg)
 				w.Write(extraData)
 			}

@@ -5,12 +5,15 @@ import (
 	"chatgogo/backend/internal/chathub"
 	"chatgogo/backend/internal/models"
 	"chatgogo/backend/internal/storage"
+	"chatgogo/backend/internal/telegram"
 	"context"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -58,6 +61,11 @@ func setupDependencies() (*gorm.DB, *redis.Client) {
 func main() {
 	log.Println("Starting ChatGoGo Backend...")
 
+	err := godotenv.Load()
+	if err != nil {
+		log.Println("Warning: Error loading .env file")
+	}
+
 	// 1. Ініціалізація залежностей
 	db, rdb := setupDependencies()
 	s := storage.NewStorageService(db, rdb)
@@ -66,9 +74,19 @@ func main() {
 	hub := chathub.NewManagerService(s)
 	matcher := chathub.NewMatcherService(hub, s)
 
+	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
+	if botToken == "" {
+		log.Fatal("TELEGRAM_BOT_TOKEN не встановлено!")
+	}
+	botService, err := telegram.NewBotService(botToken, hub)
+	if err != nil {
+		log.Fatalf("Не вдалося запустити Telegram-бота: %v", err)
+	}
+
 	// 3. Запуск основних Goroutines
-	go hub.Run()     // Головний диспетчер
-	go matcher.Run() // Сервіс пошуку
+	go hub.Run()        // Головний диспетчер
+	go matcher.Run()    // Сервіс пошуку
+	go botService.Run() // tg bot service
 
 	// 4. Налаштування Gin та роутингу
 	r := gin.Default()

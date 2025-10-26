@@ -93,10 +93,10 @@ func (m *MatcherService) findMatch(req models.SearchRequest) {
 
 			// 5. Оновлення статусу клієнтів
 			if client1, ok := m.Hub.Clients[req.UserID]; ok {
-				client1.RoomID = roomID
+				client1.SetRoomID(roomID)
 			}
 			if client2, ok := m.Hub.Clients[targetID]; ok {
-				client2.RoomID = roomID
+				client2.SetRoomID(roomID)
 			}
 
 			// 6. Повідомлення обох клієнтів про з'єднання
@@ -108,8 +108,8 @@ func (m *MatcherService) findMatch(req models.SearchRequest) {
 			}
 
 			// Надсилаємо повідомлення обом клієнтам через їхні канали Send
-			m.Hub.Clients[req.UserID].Send <- matchMessage
-			m.Hub.Clients[targetID].Send <- matchMessage
+			m.Hub.Clients[req.UserID].GetSendChannel() <- matchMessage
+			m.Hub.Clients[targetID].GetSendChannel() <- matchMessage
 
 			// 7. Видалення обох користувачів із черги
 			delete(m.Queue, req.UserID)
