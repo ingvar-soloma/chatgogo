@@ -32,6 +32,9 @@ func (s *BotService) Run() {
 	updates := s.BotAPI.GetUpdatesChan(u)
 
 	for update := range updates {
+		// 1️⃣ Реакції (нове API Telegram)
+		// todo: implement reactions when lib will allow
+
 		if update.Message == nil {
 			continue // Ігноруємо оновлення без повідомлень (редагування, статуси тощо)
 		}
@@ -96,6 +99,15 @@ func (s *BotService) Run() {
 		case msg.Voice != nil:
 			chatMsg.Type = "voice"
 			chatMsg.Content = msg.Voice.FileID
+
+		case msg.Animation != nil:
+			chatMsg.Type = "animation"
+			chatMsg.Content = msg.Animation.FileID
+			chatMsg.Metadata = msg.Caption
+
+		case msg.VideoNote != nil:
+			chatMsg.Type = "video_note"
+			chatMsg.Content = msg.VideoNote.FileID
 
 		default:
 			c.GetSendChannel() <- models.ChatMessage{

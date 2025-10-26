@@ -124,7 +124,7 @@ func (m *ManagerService) Run() {
 					}
 				}
 
-			case "text", "photo", "sticker", "video", "voice":
+			case "text", "photo", "sticker", "video", "voice", "animation", "video_note", "reply", "edit":
 				// Це звичайне текстове повідомлення
 				if msg.RoomID == "" {
 					log.Printf("Message from %s rejected: No active room.", msg.SenderID)

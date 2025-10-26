@@ -42,6 +42,10 @@ func (c *Client) writePump() {
 	}()
 
 	for message := range c.Send {
+		if message.SenderID == c.AnonID && message.Type != "system_info" {
+			continue // не надсилаємо собі
+		}
+
 		// Конвертуємо AnonID (string) назад у ChatID (int64)
 		chatID, _ := strconv.ParseInt(c.AnonID, 10, 64)
 		if chatID == 0 {
@@ -54,10 +58,6 @@ func (c *Client) writePump() {
 		switch message.Type {
 
 		case "text":
-			// Не надсилаємо власні текстові повідомлення назад собі
-			if message.SenderID == c.AnonID {
-				continue
-			}
 			tgMsg = tgbotapi.NewMessage(chatID, message.Content)
 
 		case "photo":
@@ -79,6 +79,22 @@ func (c *Client) writePump() {
 		case "voice":
 			// Пересилання голосового повідомлення за допомогою FileID (Content)
 			tgMsg = tgbotapi.NewVoice(chatID, tgbotapi.FileID(message.Content))
+
+		case "animation":
+			animMsg := tgbotapi.NewAnimation(chatID, tgbotapi.FileID(message.Content))
+			animMsg.Caption = message.Metadata
+			tgMsg = animMsg
+
+		case "video_note":
+			tgMsg = tgbotapi.NewVideoNote(chatID, 0, tgbotapi.FileID(message.Content))
+
+		case "edit":
+			reply := tgbotapi.NewMessage(chatID, "✏️ *Редаговано:* "+message.Content)
+			tgMsg = reply
+
+		case "reply":
+			reply := tgbotapi.NewMessage(chatID, "↩️ *Відповідь від співрозмовника:*\n"+message.Content)
+			tgMsg = reply
 
 		case "system_search_start":
 			tgMsg = tgbotapi.NewMessage(chatID, message.Content)
@@ -116,6 +132,7 @@ func (c *Client) writePump() {
 			if msg, ok := tgMsg.(tgbotapi.MessageConfig); ok {
 				msg.ParseMode = parseMode
 				tgMsg = msg // Оновлюємо змінну
+				msg.ReplyToMessageID = extractMessageID(message.Metadata)
 			}
 
 			if _, err := c.BotAPI.Send(tgMsg); err != nil {
