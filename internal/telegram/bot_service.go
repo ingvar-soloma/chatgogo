@@ -5,6 +5,7 @@ import (
 	"chatgogo/backend/internal/models"
 	"log"
 	"strconv"
+	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -32,54 +33,88 @@ func (s *BotService) Run() {
 
 	for update := range updates {
 		if update.Message == nil {
+			continue // Ігноруємо оновлення без повідомлень (редагування, статуси тощо)
+		}
+
+		msg := update.Message
+		anonID := strconv.FormatInt(msg.Chat.ID, 10)
+
+		// 🟢 1. Find or create a Telegram client
+		c, ok := s.Hub.Clients[anonID]
+		if !ok {
+			c = &Client{
+				AnonID: anonID,
+				Hub:    s.Hub,
+				Send:   make(chan models.ChatMessage, 10),
+				BotAPI: s.BotAPI,
+			}
+			s.Hub.RegisterCh <- c
+			go c.Run()
+		}
+
+		// 🟢 2. Create a ChatMessage
+		chatMsg := models.ChatMessage{
+			SenderID: anonID,
+			RoomID:   c.GetRoomID(),
+		}
+
+		switch {
+		case msg.Text != "":
+			chatMsg.Type = "text"
+			chatMsg.Content = msg.Text
+
+			if msg.IsCommand() {
+				switch msg.Command() {
+				case "start":
+					chatMsg.Type = "command_start"
+				case "stop":
+					chatMsg.Type = "command_stop"
+				default:
+					c.GetSendChannel() <- models.ChatMessage{
+						Type:    "system_info",
+						Content: "❌ Невідома команда. Використовуйте /start або /stop.",
+					}
+					continue
+				}
+			}
+
+		case msg.Photo != nil:
+			chatMsg.Type = "photo"
+			largestPhoto := msg.Photo[len(msg.Photo)-1]
+			chatMsg.Content = largestPhoto.FileID
+			chatMsg.Metadata = msg.Caption
+
+		case msg.Video != nil:
+			chatMsg.Type = "video"
+			chatMsg.Content = msg.Video.FileID
+			chatMsg.Metadata = msg.Caption
+
+		case msg.Sticker != nil:
+			chatMsg.Type = "sticker"
+			chatMsg.Content = msg.Sticker.FileID
+
+		case msg.Voice != nil:
+			chatMsg.Type = "voice"
+			chatMsg.Content = msg.Voice.FileID
+
+		default:
+			c.GetSendChannel() <- models.ChatMessage{
+				Type:    "system_info",
+				Content: "⚠️ Цей тип повідомлення поки що не підтримується.",
+			}
 			continue
 		}
 
-		// Використовуємо ChatID як унікальний AnonID
-		anonID := strconv.FormatInt(update.Message.Chat.ID, 10)
-
-		// 1. Знайти або створити клієнта
-		client, exists := s.Hub.Clients[anonID]
-		if !exists {
-			log.Printf("Реєстрація нового Telegram-клієнта: %s", anonID)
-			tgClient := &Client{
-				AnonID: anonID,
-				RoomID: "",
-				Hub:    s.Hub,
-				Send:   make(chan models.ChatMessage, 256), // Свій канал
-				BotAPI: s.BotAPI,
+		// 🟢 3. Reject messages if not in a room (and not a command)
+		if chatMsg.RoomID == "" && !strings.HasPrefix(chatMsg.Type, "command_") {
+			c.GetSendChannel() <- models.ChatMessage{
+				Type:    "system_info",
+				Content: "❌ Ви не перебуваєте в чаті. Напишіть /start, щоб знайти співрозмовника.",
 			}
-
-			s.Hub.RegisterCh <- tgClient // Реєструємо в хабі
-			tgClient.Run()               // Запускаємо його writePump
-			client = tgClient            // Тепер ми працюємо з ним
+			continue
 		}
 
-		// 2. Конвертуємо повідомлення з Telegram в ChatMessage
-		msg := models.ChatMessage{
-			SenderID: anonID,
-			RoomID:   client.GetRoomID(),
-			Content:  update.Message.Text,
-		}
-
-		// 3. Визначаємо тип повідомлення (команда чи текст)
-		if update.Message.IsCommand() {
-			switch update.Message.Command() {
-			case "start", "search":
-				msg.Type = "command_search"
-			case "stop":
-				msg.Type = "command_stop" // Вам треба буде обробити це в ManagerService
-			default:
-				errMsg := tgbotapi.NewMessage(update.Message.Chat.ID, "Невідома команда.")
-				s.BotAPI.Send(errMsg)
-				continue
-			}
-		} else {
-			msg.Type = "text"
-		}
-
-		// 4. Надсилаємо повідомлення в головний хаб
-		// Воно буде оброблене в `case msg := <-m.IncomingCh:`
-		s.Hub.IncomingCh <- msg
+		// 🟢 4. Forward message into Hub
+		s.Hub.IncomingCh <- chatMsg
 	}
 }

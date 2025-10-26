@@ -95,7 +95,7 @@ func (m *ManagerService) Run() {
 		case msg := <-m.IncomingCh:
 
 			switch msg.Type {
-			case "command_search":
+			case "command_search", "command_start":
 				// Це команда на пошук співрозмовника. Надсилаємо в Matcher.
 				log.Printf("Routing search command from %s to Matcher...", msg.SenderID)
 
@@ -124,11 +124,20 @@ func (m *ManagerService) Run() {
 					}
 				}
 
-			case "text":
+			case "text", "photo", "sticker", "video", "voice":
 				// Це звичайне текстове повідомлення
 				if msg.RoomID == "" {
 					log.Printf("Message from %s rejected: No active room.", msg.SenderID)
-					// Можна надіслати клієнту системне повідомлення про помилку
+
+					if client, ok := m.Clients[msg.SenderID]; ok {
+						select {
+						case client.GetSendChannel() <- models.ChatMessage{
+							Type:    "system_info",
+							Content: "❌ Ви не перебуваєте в активному чаті.",
+						}:
+						default:
+						}
+					}
 					continue
 				}
 

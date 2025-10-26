@@ -48,56 +48,78 @@ func (c *Client) writePump() {
 			continue
 		}
 
-		var content string
+		var tgMsg tgbotapi.Chattable
+		var parseMode = tgbotapi.ModeMarkdown
 
-		// Обробляємо різні типи повідомлень
 		switch message.Type {
+
 		case "text":
-			// Не надсилаємо власні повідомлення назад собі
+			// Не надсилаємо власні текстові повідомлення назад собі
 			if message.SenderID == c.AnonID {
 				continue
 			}
-			content = message.Content
+			tgMsg = tgbotapi.NewMessage(chatID, message.Content)
+
+		case "photo":
+			// Пересилання фото за допомогою FileID (Content)
+			photoMsg := tgbotapi.NewPhoto(chatID, tgbotapi.FileID(message.Content))
+			photoMsg.Caption = message.Metadata // Додаємо підпис
+			tgMsg = photoMsg
+
+		case "sticker":
+			// Пересилання стікера за допомогою FileID (Content)
+			tgMsg = tgbotapi.NewSticker(chatID, tgbotapi.FileID(message.Content))
+
+		case "video":
+			// Пересилання відео за допомогою FileID (Content)
+			videoMsg := tgbotapi.NewVideo(chatID, tgbotapi.FileID(message.Content))
+			videoMsg.Caption = message.Metadata // Додаємо підпис
+			tgMsg = videoMsg
+
+		case "voice":
+			// Пересилання голосового повідомлення за допомогою FileID (Content)
+			tgMsg = tgbotapi.NewVoice(chatID, tgbotapi.FileID(message.Content))
 
 		case "system_search_start":
-			content = message.Content
+			tgMsg = tgbotapi.NewMessage(chatID, message.Content)
 
 		case "system_match_found":
-			// !! Важливо: Matcher має надіслати це повідомлення
-			// І ми маємо оновити RoomID тут
 			c.RoomID = message.RoomID
-			content = "✅ Співрозмовника знайдено! Починайте спілкування."
+			tgMsg = tgbotapi.NewMessage(chatID, "✅ **Співрозмовника знайдено!** Починайте спілкування.")
 
 		case "system_match_stop_self":
-			c.RoomID = "" // Виходимо з кімнати
-			content = "🚪 **Чат завершено.** Ви вийшли з кімнати. Напишіть `/start`, щоб знайти нового співрозмовника."
+			c.RoomID = ""
+			tgMsg = tgbotapi.NewMessage(chatID, "🚪 **Чат завершено.** Ви вийшли з кімнати. Напишіть `/start`, щоб знайти нового співрозмовника.")
 
 		case "system_match_stop_partner":
-			c.RoomID = "" // Виходимо з кімнати
-			content = "🚫 **Чат завершено.** Співрозмовник покинув чат. Напишіть `/start`, щоб знайти нового співрозмовника."
+			c.RoomID = ""
+			tgMsg = tgbotapi.NewMessage(chatID, "🚫 **Чат завершено.** Співрозрозмовник покинув чат. Напишіть `/start`, щоб знайти нового співрозмовника.")
 
 		case "system_info":
-			// Для повідомлень типу "Ви не в чаті"
-			content = message.Content
-
-		// Додайте інші системні повідомлення (ban, search_start тощо)
+			tgMsg = tgbotapi.NewMessage(chatID, message.Content)
 
 		default:
-			if message.SenderID != c.AnonID && message.SenderID != "system" {
-				content = "ℹ️ Співрозмовник надіслав повідомлення, яке не підтримується у Telegram (наприклад, стікер або фото)."
+			// ⬅️ ОБРОБКА НЕПІДТРИМУВАНОГО ТИПУ ВІД HUB/МАТЧЕРА
+			// Якщо системне повідомлення чи повідомлення від партнера має невідомий тип
+			if message.SenderID != c.AnonID {
+				log.Printf("Unhandled message type received from Hub for TG client %s: %s", c.AnonID, message.Type)
+				// Надсилаємо попередження замість непідтримуваного типу
+				tgMsg = tgbotapi.NewMessage(chatID, "⚠️ **Помилка пересилання.** Співрозмовник надіслав непідтримуваний або невідомий тип повідомлення.")
 			} else {
-				// Це системне повідомлення, яке ми не знаємо, як обробити
-				log.Printf("Unhandled system message type for TG client %s: %s", c.AnonID, message.Type)
-				continue // Не турбувати користувача
+				continue // Ігноруємо власні невідомі повідомлення
 			}
 		}
 
-		if content != "" {
-			msg := tgbotapi.NewMessage(chatID, content)
-			msg.ParseMode = tgbotapi.ModeMarkdown
+		// Відправка повідомлення
+		if tgMsg != nil {
+			// Встановлюємо ParseMode, якщо це Message (для Markdown)
+			if msg, ok := tgMsg.(tgbotapi.MessageConfig); ok {
+				msg.ParseMode = parseMode
+				tgMsg = msg // Оновлюємо змінну
+			}
 
-			if _, err := c.BotAPI.Send(msg); err != nil {
-				log.Printf("ERROR: Failed to send message to Telegram ChatID %d: %v", chatID, err)
+			if _, err := c.BotAPI.Send(tgMsg); err != nil {
+				log.Printf("ERROR: Failed to send Telegram message of type %s to ChatID %d: %v", message.Type, chatID, err)
 			}
 		}
 	}
