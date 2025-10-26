@@ -103,7 +103,7 @@ func (m *MatcherService) findMatch(req models.SearchRequest) {
 			matchMessage := models.ChatMessage{
 				RoomID:   roomID,
 				Content:  "Співрозмовника знайдено! Почніть діалог.",
-				Type:     "system_match",
+				Type:     "system_match_found",
 				SenderID: "system",
 			}
 

@@ -59,25 +59,46 @@ func (c *Client) writePump() {
 			}
 			content = message.Content
 
+		case "system_search_start":
+			content = message.Content
+
 		case "system_match_found":
 			// !! Важливо: Matcher має надіслати це повідомлення
 			// І ми маємо оновити RoomID тут
 			c.RoomID = message.RoomID
 			content = "✅ Співрозмовника знайдено! Починайте спілкування."
 
-		case "system_match_left":
+		case "system_match_stop_self":
 			c.RoomID = "" // Виходимо з кімнати
-			content = "🚫 Співрозмовник покинув чат."
+			content = "🚪 **Чат завершено.** Ви вийшли з кімнати. Напишіть `/start`, щоб знайти нового співрозмовника."
+
+		case "system_match_stop_partner":
+			c.RoomID = "" // Виходимо з кімнати
+			content = "🚫 **Чат завершено.** Співрозмовник покинув чат. Напишіть `/start`, щоб знайти нового співрозмовника."
+
+		case "system_info":
+			// Для повідомлень типу "Ви не в чаті"
+			content = message.Content
 
 		// Додайте інші системні повідомлення (ban, search_start тощо)
 
 		default:
-			continue // Не надсилаємо невідомі типи
+			if message.SenderID != c.AnonID && message.SenderID != "system" {
+				content = "ℹ️ Співрозмовник надіслав повідомлення, яке не підтримується у Telegram (наприклад, стікер або фото)."
+			} else {
+				// Це системне повідомлення, яке ми не знаємо, як обробити
+				log.Printf("Unhandled system message type for TG client %s: %s", c.AnonID, message.Type)
+				continue // Не турбувати користувача
+			}
 		}
 
 		if content != "" {
 			msg := tgbotapi.NewMessage(chatID, content)
-			c.BotAPI.Send(msg)
+			msg.ParseMode = tgbotapi.ModeMarkdown
+
+			if _, err := c.BotAPI.Send(msg); err != nil {
+				log.Printf("ERROR: Failed to send message to Telegram ChatID %d: %v", chatID, err)
+			}
 		}
 	}
 }

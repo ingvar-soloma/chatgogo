@@ -38,9 +38,17 @@ func (m *ManagerService) StartPubSubListener() {
 				continue
 			}
 
+			log.Printf("Received message from Redis channel %s. Routing to clients.", msg.Channel)
+
 			// ... (3. РОЗСИЛКА КЛІЄНТАМ)
 			for _, client := range m.Clients {
 				if client.GetRoomID() == msg.Channel {
+
+					// Якщо кімната закривається, очищуємо RoomID на сервері
+					if chatMsg.Type == "system_match_left" {
+						client.SetRoomID("")
+					}
+
 					select {
 					case client.GetSendChannel() <- chatMsg:
 						// OK
@@ -91,12 +99,30 @@ func (m *ManagerService) Run() {
 				// Це команда на пошук співрозмовника. Надсилаємо в Matcher.
 				log.Printf("Routing search command from %s to Matcher...", msg.SenderID)
 
-				// Створюємо структуру SearchRequest
+				// 1. Створюємо структуру SearchRequest
 				request := models.SearchRequest{
 					UserID: msg.SenderID,
 					// Тут можна додати фільтри з msg.Content, якщо він містить JSON-налаштування
 				}
+
+				// 2. Надсилаємо запит у Matcher
 				m.MatchRequestCh <- request
+
+				// 3. Надсилаємо клієнту системне повідомлення про початок пошуку
+				if client, ok := m.Clients[msg.SenderID]; ok {
+					searchStartMessage := models.ChatMessage{
+						Type:     "system_search_start", // ⬅️ НОВИЙ ТИП
+						SenderID: "system",
+						Content:  "🔍 **Пошук співрозмовника розпочато...** Очікуйте з'єднання.",
+						// RoomID тут порожній, оскільки кімнати ще немає
+					}
+					select {
+					case client.GetSendChannel() <- searchStartMessage:
+						// OK
+					default:
+						log.Printf("WARNING: Client %s send channel full during search start.", client.GetAnonID())
+					}
+				}
 
 			case "text":
 				// Це звичайне текстове повідомлення
@@ -110,6 +136,59 @@ func (m *ManagerService) Run() {
 				// 2. Публікація через Redis
 				m.Storage.PublishMessage(msg.RoomID, msg)
 
+			case "command_stop":
+				log.Printf("Handling 'command_stop' from %s", msg.SenderID)
+
+				// 1. ПЕРЕВІРКА КІМНАТИ
+				roomID := msg.RoomID
+				if roomID == "" {
+					// Клієнт не в кімнаті.
+					// TODO: Додайте логіку для видалення з черги Matcher'а, якщо потрібно.
+
+					// Поки що просто повідомимо, що нічого зупиняти
+					if client, ok := m.Clients[msg.SenderID]; ok {
+						client.GetSendChannel() <- models.ChatMessage{
+							Type:     "system_info", // Ми обробимо цей тип у tg_client
+							SenderID: "system",
+							Content:  "Ви не перебуваєте в активному чаті.",
+						}
+					}
+					continue
+				}
+
+				// 2. СИСТЕМНІ ПОВІДОМЛЕННЯ (РІЗНІ ДЛЯ ІНІЦІАТОРА ТА ІНШИХ)
+
+				// Повідомлення для ініціатора зупинки
+				initiatorMessage := models.ChatMessage{
+					Type:     "system_match_stop_self", // Новий тип для клієнта, що зупинив
+					SenderID: "system",
+					RoomID:   roomID,
+					Content:  "Ви завершили чат.",
+				}
+
+				// Повідомлення для іншого учасника кімнати
+				partnerMessage := models.ChatMessage{
+					Type:     "system_match_stop_partner", // Новий тип для партнера
+					SenderID: "system",
+					RoomID:   roomID,
+					Content:  "Співрозмовник покинув чат.",
+				}
+
+				// 3.1. Надсилаємо повідомлення ІНІЦІАТОРУ ЛОКАЛЬНО
+				if initiatorClient, ok := m.Clients[msg.SenderID]; ok {
+					select {
+					case initiatorClient.GetSendChannel() <- initiatorMessage:
+						// OK
+					default:
+						log.Printf("WARNING: Initiator client %s send channel full.", initiatorClient.GetAnonID())
+						// Не вдалося надіслати.
+					}
+				}
+
+				// 3.2. Публікуємо повідомлення для ПАРТНЕРА через Redis Pub/Sub
+				// Це гарантує, що повідомлення отримає партнер, незалежно від того,
+				// на якому Go-сервері він знаходиться.
+				m.Storage.PublishMessage(roomID, partnerMessage)
 			default:
 				log.Printf("Unknown message type received: %s from %s", msg.Type, msg.SenderID)
 			}

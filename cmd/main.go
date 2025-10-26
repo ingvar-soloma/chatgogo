@@ -19,7 +19,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// Ця функція імітує ініціалізацію DB та Redis (потрібно буде реалізувати)
 func setupDependencies() (*gorm.DB, *redis.Client) {
 	// 1. PostgreSQL (Використовуємо дані з docker-compose)
 	dsn := "host=localhost user=user password=password dbname=chatgogodb port=5432 sslmode=disable"
