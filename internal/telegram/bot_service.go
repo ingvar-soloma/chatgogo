@@ -35,6 +35,29 @@ func (s *BotService) Run() {
 		// 1️⃣ Реакції (нове API Telegram)
 		// todo: implement reactions when lib will allow
 
+		// 2️⃣ Редагування повідомлень
+		if update.EditedMessage != nil {
+			msg := update.EditedMessage
+			senderID := strconv.FormatInt(msg.From.ID, 10)
+
+			chatMsg := models.ChatMessage{
+				SenderID: senderID,
+				RoomID:   strconv.FormatInt(msg.Chat.ID, 10),
+				Type:     "edit",
+				Content:  msg.Text,
+			}
+
+			// Якщо це було редагування відповіді на ботське повідомлення
+			if msg.ReplyToMessage != nil && msg.ReplyToMessage.From != nil && msg.ReplyToMessage.From.IsBot {
+				chatMsg.Type = "reply"
+				chatMsg.Metadata = msg.ReplyToMessage.Text
+			}
+
+			s.Hub.IncomingCh <- chatMsg
+			continue
+		}
+
+		// 3️⃣ Звичайні повідомлення
 		if update.Message == nil {
 			continue // Ігноруємо оновлення без повідомлень (редагування, статуси тощо)
 		}
