@@ -1,0 +1,18 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+cmd = "go build -o ./tmp/main ./cmd/main.go"
+bin = "tmp/main"
+full_bin = "./tmp/main"
+include_ext = ["go", "yaml", "json"]
+exclude_dir = ["vendor", "tmp", "node_modules"]
+delay = 1000 # мс після зміни файлу
+
+[log]
+time = true
+
+[color]
+main = "magenta"
+build = "yellow"
+runner = "green"

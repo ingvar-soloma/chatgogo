@@ -2,17 +2,23 @@ services:
   backend:
     build:
       context: .
-      dockerfile: Dockerfile
-    restart: always
+      dockerfile: DockerfileDev
+    container_name: chatgogo-backend-dev
+    restart: unless-stopped
+    volumes:
+      - .:/app # live-reload
+      - air_tmp:/app/tmp
     ports:
       - "8080:8080"
     depends_on:
       - postgres
       - redis
     environment:
+      GIN_MODE: debug
       DB_HOST: ${DB_HOST}
       DB_PORT: ${DB_PORT}
-
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_DB: ${DB_NAME}
       REDIS_ADDR: ${REDIS_HOST}:${REDIS_PORT}
       REDIS_HOST: ${REDIS_HOST}
       REDIS_PORT: ${REDIS_PORT}
@@ -20,9 +26,12 @@ services:
 
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
 
+    command: ["air", "-c", ".air.toml"]
+
   postgres:
     image: postgres:18.0-alpine3.22
-    restart: always
+    container_name: chatgogo-postgres-dev
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_DB: ${DB_NAME}
@@ -34,8 +43,14 @@ services:
 
   redis:
     image: redis:8.0.4-alpine
-    restart: always
+    container_name: chatgogo-redis-dev
+    restart: unless-stopped
     ports:
-      - "6380:6379"
+      - "6381:6379"
+    volumes:
+      - redis_data:/data
+
 volumes:
   postgres_data:
+  redis_data:
+  air_tmp:
