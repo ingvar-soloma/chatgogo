@@ -22,7 +22,7 @@ func NewBotService(token string, hub *chathub.ManagerService, s storage.Storage)
 	if err != nil {
 		return nil, err
 	}
-	bot.Debug = true // Встановіть true для дебагу
+	bot.Debug = false // Встановіть true для дебагу
 	log.Printf("Authorized on account %s", bot.Self.UserName)
 	return &BotService{BotAPI: bot, Hub: hub, Storage: s}, nil
 }
@@ -56,18 +56,32 @@ func (s *BotService) Run() {
 				go c.Run()
 			}
 
+			var tgMessageIDSender *uint
+			tempID := uint(msg.MessageID)
+
+			// 4. Беремо адресу тимчасової змінної, щоб отримати *uint
+			tgMessageIDSender = &tempID
+
 			chatMsg := models.ChatMessage{
-				SenderID: anonID,
-				RoomID:   c.GetRoomID(),
-				Type:     "edit",
-				Content:  msg.Text,
+				SenderID:          anonID,
+				TgMessageIDSender: tgMessageIDSender,
+				RoomID:            c.GetRoomID(),
+				Type:              "edit",
+				Content:           msg.Text,
 			}
 
-			// Якщо це було редагування відповіді на ботське повідомлення
-			if msg.ReplyToMessage != nil && msg.ReplyToMessage.From != nil && msg.ReplyToMessage.From.IsBot {
-				chatMsg.Type = "reply"
-				// Передаємо ID оригінального бот-повідомлення, щоб відповіді були ниткою
-				//chatMsg.Metadata = strconv.Itoa(msg.ReplyToMessage.MessageID)
+			// 1. Отримуємо Telegram Message ID, яке відредаговане
+			editedTGID := uint(msg.MessageID)
+
+			// 2. ЗНАЙТИ ВНУТРІШНІЙ CHAT HISTORY ID ЗА TG ID
+			originalHistoryID, err := s.Storage.FindOriginalHistoryIDByTgID(editedTGID)
+
+			if err != nil {
+				log.Printf("ERROR: Failed to find original history ID: %v", err)
+				// Можемо продовжити без реплаю
+			} else if originalHistoryID != nil {
+				// Встановлюємо ChatHistory.ID як посилання на реплай
+				chatMsg.ReplyToMessageID = originalHistoryID
 			}
 
 			s.Hub.IncomingCh <- chatMsg
@@ -114,8 +128,6 @@ func (s *BotService) Run() {
 			RoomID:            c.GetRoomID(),
 		}
 
-		log.Printf("ReplyingReplyingReplying %d", msg.ReplyToMessage)
-
 		// Якщо користувач відповів на повідомлення
 		if msg.ReplyToMessage != nil && msg.ReplyToMessage.From != nil {
 			// 1. Отримуємо Telegram Message ID, на яке відповіли
@@ -130,7 +142,6 @@ func (s *BotService) Run() {
 			} else if originalHistoryID != nil {
 				// Встановлюємо ChatHistory.ID як посилання на реплай
 				chatMsg.ReplyToMessageID = originalHistoryID
-				chatMsg.Type = "reply"
 			}
 		}
 
@@ -209,7 +220,6 @@ func (s *BotService) Run() {
 			}
 			continue
 		}
-		log.Printf("🟢🟢🟢 sending")
 
 		// 🟢 4. Forward message into Hub
 		s.Hub.IncomingCh <- chatMsg

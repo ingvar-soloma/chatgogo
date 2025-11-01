@@ -163,7 +163,7 @@ func (s *Service) FindOriginalHistoryIDByTgID(tgMsgID uint) (*uint, error) {
 	// Якщо воно знайдено, це означає, що користувач відповів на це повідомлення.
 	err := s.DB.Where("tg_message_id_sender = ?", tgMsgID).
 		Or("tg_message_id_receiver = ?", tgMsgID).
-		First(&history).Error
+		Last(&history).Error
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil // Не знайдено, не є реплаєм в анонімному чаті

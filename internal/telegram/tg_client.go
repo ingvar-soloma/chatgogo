@@ -45,7 +45,6 @@ func (c *Client) writePump() {
 	}()
 
 	for message := range c.Send {
-		log.Printf("Sending message to Telegram client %s: %s", c.AnonID, message.Type)
 		if message.SenderID == c.AnonID && message.Type != "system_info" {
 			continue // не надсилаємо собі
 		}
@@ -60,75 +59,57 @@ func (c *Client) writePump() {
 		//var parseMode = tgbotapi.ModeMarkdownV2
 		var parseMode = tgbotapi.ModeMarkdown
 
+		// --- 1. Створення об'єкта Telegram-повідомлення ---
 		switch message.Type {
 
-		case "text":
+		case "text", "system_info":
 			msg := tgbotapi.NewMessage(chatID, message.Content)
-			msg.ParseMode = parseMode // 💡 ДОДАТИ: Встановлюємо ParseMode
+			msg.ParseMode = parseMode
 			tgMsg = msg
+
+		case "edit":
+			msg := tgbotapi.NewMessage(chatID, "✏️ *Редаговано:*\n"+message.Content)
+			msg.ParseMode = parseMode
+			tgMsg = msg
+
+		// case "reply" видалено, оскільки це тепер властивість, а не тип.
 
 		case "photo":
 			// Пересилання фото за допомогою FileID (Content)
 			photoMsg := tgbotapi.NewPhoto(chatID, tgbotapi.FileID(message.Content))
 			photoMsg.Caption = message.Metadata // Додаємо підпис
-			photoMsg.ParseMode = parseMode      // 💡 ДОДАТИ: Встановлюємо ParseMode для підпису
+			photoMsg.ParseMode = parseMode      // Встановлюємо ParseMode для підпису
 			tgMsg = photoMsg
 
 		case "sticker":
-			// Пересилання стікера за допомогою FileID (Content)
+			// StickerConfig підтримує ReplyToMessageID
 			tgMsg = tgbotapi.NewSticker(chatID, tgbotapi.FileID(message.Content))
 
 		case "video":
 			// Пересилання відео за допомогою FileID (Content)
 			videoMsg := tgbotapi.NewVideo(chatID, tgbotapi.FileID(message.Content))
-			videoMsg.Caption = message.Metadata // Додаємо підпис
-			videoMsg.ParseMode = parseMode      // 💡 ДОДАТИ: Встановлюємо ParseMode для підпису
+			videoMsg.Caption = message.Metadata
+			videoMsg.ParseMode = parseMode
 			tgMsg = videoMsg
 
 		case "voice":
-			// Пересилання голосового повідомлення за допомогою FileID (Content)
+			// VoiceConfig підтримує ReplyToMessageID
 			tgMsg = tgbotapi.NewVoice(chatID, tgbotapi.FileID(message.Content))
 
 		case "animation":
 			animMsg := tgbotapi.NewAnimation(chatID, tgbotapi.FileID(message.Content))
 			animMsg.Caption = message.Metadata
-			animMsg.ParseMode = parseMode // 💡 ДОДАТИ: Встановлюємо ParseMode для підпису
+			animMsg.ParseMode = parseMode
 			tgMsg = animMsg
 
 		case "video_note":
+			// VideoNoteConfig підтримує ReplyToMessageID
 			tgMsg = tgbotapi.NewVideoNote(chatID, 0, tgbotapi.FileID(message.Content))
 
-		case "edit":
-			reply := tgbotapi.NewMessage(chatID, "✏️ *Редаговано:* "+message.Content)
-			tgMsg = reply
-
-		case "reply":
-			// 1. Створюємо нове повідомлення (як tgbotapi.MessageConfig)
-			msg := tgbotapi.NewMessage(chatID, message.Content)
-
-			// 2. Перевіряємо, чи є ID для відповіді
-			if message.ReplyToMessageID != nil {
-				originalHistoryID := *message.ReplyToMessageID // ВНУТРІШНІЙ ID
-
-				// ЗНАХОДИМО TG MESSAGE ID ДЛЯ ВІДПОВІДІ
-				if c.Storage == nil {
-					log.Printf("WARN: Storage is nil in Telegram client %s, cannot resolve ReplyToMessageID for history %d", c.AnonID, originalHistoryID)
-				} else {
-					replyTgID, err := c.Storage.FindPartnerTelegramIDForReply(originalHistoryID, c.AnonID)
-					if err != nil {
-						log.Printf("ERROR: Failed to find partner TG Reply ID for history ID %d: %v", originalHistoryID, err)
-						// Продовжуємо без реплаю
-					} else if replyTgID != nil {
-						// Встановлюємо ЗНАЙДЕНИЙ TG ID для відправки реплаю
-						msg.ReplyToMessageID = *replyTgID
-						log.Printf("SUCCESS: Setting ReplyToMessageID to %d for AnonID %s", *replyTgID, c.AnonID)
-					}
-				}
-			}
-			tgMsg = msg
-
 		case "system_search_start":
-			tgMsg = tgbotapi.NewMessage(chatID, message.Content)
+			msg := tgbotapi.NewMessage(chatID, message.Content)
+			msg.ParseMode = parseMode
+			tgMsg = msg
 
 		case "system_match_found":
 			c.RoomID = message.RoomID
@@ -151,11 +132,6 @@ func (c *Client) writePump() {
 			msg.ParseMode = parseMode
 			tgMsg = msg
 
-		case "system_info":
-			msg := tgbotapi.NewMessage(chatID, message.Content)
-			msg.ParseMode = parseMode
-			tgMsg = msg
-
 		default:
 			// ⬅️ ОБРОБКА НЕПІДТРИМУВАНОГО ТИПУ ВІД HUB/МАТЧЕРА
 			// Якщо системне повідомлення чи повідомлення від партнера має невідомий тип
@@ -163,30 +139,75 @@ func (c *Client) writePump() {
 				log.Printf("Unhandled message type received from Hub for TG client %s: %s", c.AnonID, message.Type)
 				// Надсилаємо попередження замість непідтримуваного типу
 				text := "⚠️ **Помилка пересилання.** Співрозмовник надіслав непідтримуваний або невідомий тип повідомлення."
-				tgMsg = tgbotapi.NewMessage(chatID, escapeMarkdownV2(text))
+				msg := tgbotapi.NewMessage(chatID, escapeMarkdownV2(text))
+				msg.ParseMode = parseMode
+				tgMsg = msg
 			} else {
 				continue // Ігноруємо власні невідомі повідомлення
 			}
 		}
 
-		// Відправка повідомлення
-		if tgMsg != nil {
-			log.Printf("⚠️ BotAPI.Send: %+v", tgMsg)
-			// Встановлюємо ParseMode, якщо це Message (для Markdown)
-			if msg, ok := tgMsg.(tgbotapi.MessageConfig); ok {
-				msg.ParseMode = parseMode
-				// ReplyToMessageID ми тут не встановлюємо, оскільки ідентифікатор повідомлення з іншого чату не підходить
-				tgMsg = msg // Оновлюємо змінну
-			}
+		// --- 2. ВСТАНОВЛЕННЯ ВЛАСТИВОСТІ REPLY_TO_MESSAGE_ID (Загальна логіка) ---
+		if tgMsg != nil && message.ReplyToMessageID != nil {
+			originalHistoryID := *message.ReplyToMessageID // ВНУТРІШНІЙ ID
 
+			if c.Storage == nil {
+				log.Printf("WARN: Storage is nil in Telegram client %s, cannot resolve ReplyToMessageID for history %d", c.AnonID, originalHistoryID)
+			} else {
+				// 1. Знаходимо Telegram ID партнера
+				replyTgID_uint, err := c.Storage.FindPartnerTelegramIDForReply(originalHistoryID, c.AnonID)
+				if err != nil {
+					log.Printf("ERROR: Failed to find partner TG Reply ID for history ID %d: %v", originalHistoryID, err)
+				} else if replyTgID_uint != nil {
+					// Конвертуємо *uint у int для API Telegram
+					replyTgID := int(*replyTgID_uint)
+
+					// 2. Встановлюємо ReplyToMessageID для об'єкта Telegram API.
+					// Використовуємо кастинг для доступу до поля у відповідних конфігураціях.
+					// Важливо: Присвоюємо змінену структуру назад до tgMsg.
+
+					// MessageConfig (text, system_info, edit)
+					if msg, ok := tgMsg.(tgbotapi.MessageConfig); ok {
+						msg.ReplyToMessageID = replyTgID
+						tgMsg = msg
+						// PhotoConfig
+					} else if msg, ok := tgMsg.(tgbotapi.PhotoConfig); ok {
+						msg.ReplyToMessageID = replyTgID
+						tgMsg = msg
+						// VideoConfig
+					} else if msg, ok := tgMsg.(tgbotapi.VideoConfig); ok {
+						msg.ReplyToMessageID = replyTgID
+						tgMsg = msg
+						// StickerConfig
+					} else if msg, ok := tgMsg.(tgbotapi.StickerConfig); ok {
+						msg.ReplyToMessageID = replyTgID
+						tgMsg = msg
+						// VoiceConfig
+					} else if msg, ok := tgMsg.(tgbotapi.VoiceConfig); ok {
+						msg.ReplyToMessageID = replyTgID
+						tgMsg = msg
+						// AnimationConfig
+					} else if msg, ok := tgMsg.(tgbotapi.AnimationConfig); ok {
+						msg.ReplyToMessageID = replyTgID
+						tgMsg = msg
+						// VideoNoteConfig
+					} else if msg, ok := tgMsg.(tgbotapi.VideoNoteConfig); ok {
+						msg.ReplyToMessageID = replyTgID
+						tgMsg = msg
+					}
+				}
+			}
+		}
+
+		// --- 3. ВІДПРАВКА ---
+		if tgMsg != nil {
 			sentMsg, err := c.BotAPI.Send(tgMsg)
 			if err != nil {
 				log.Printf("ERROR: Failed to send Telegram message...: %v", err)
 				continue
 			}
 
-			// 4. *** НОВИЙ КРОК: ЗБЕРЕЖЕННЯ ВЛАСНОГО TG Message ID У CHAT HISTORY ***
-			// message.MessageID повинен містити ChatHistory.ID, збережений Hub'ом.
+			// 4. ЗБЕРЕЖЕННЯ ВЛАСНОГО TG Message ID У CHAT HISTORY
 			if message.ID != 0 {
 				// c.AnonID - це ID одержувача (бо ми відфільтрували відправника)
 				if c.Storage == nil {
