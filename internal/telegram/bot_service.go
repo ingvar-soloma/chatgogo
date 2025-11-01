@@ -3,6 +3,7 @@ package telegram
 import (
 	"chatgogo/backend/internal/chathub"
 	"chatgogo/backend/internal/models"
+	"chatgogo/backend/internal/storage"
 	"log"
 	"strconv"
 	"strings"
@@ -11,18 +12,19 @@ import (
 )
 
 type BotService struct {
-	BotAPI *tgbotapi.BotAPI
-	Hub    *chathub.ManagerService
+	BotAPI  *tgbotapi.BotAPI
+	Hub     *chathub.ManagerService
+	Storage storage.Storage
 }
 
-func NewBotService(token string, hub *chathub.ManagerService) (*BotService, error) {
+func NewBotService(token string, hub *chathub.ManagerService, s storage.Storage) (*BotService, error) {
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		return nil, err
 	}
-	bot.Debug = false // Встановіть true для дебагу
+	bot.Debug = true // Встановіть true для дебагу
 	log.Printf("Authorized on account %s", bot.Self.UserName)
-	return &BotService{BotAPI: bot, Hub: hub}, nil
+	return &BotService{BotAPI: bot, Hub: hub, Storage: s}, nil
 }
 
 // Run - це "ReadPump" для всіх Telegram-клієнтів
@@ -33,16 +35,30 @@ func (s *BotService) Run() {
 
 	for update := range updates {
 		// 1️⃣ Реакції (нове API Telegram)
-		// todo: implement reactions when lib will allow
+		// todo: implement reactions when api and lib will allow
 
 		// 2️⃣ Редагування повідомлень
 		if update.EditedMessage != nil {
 			msg := update.EditedMessage
-			senderID := strconv.FormatInt(msg.From.ID, 10)
+			anonID := strconv.FormatInt(msg.Chat.ID, 10)
+
+			// Гарантуємо наявність клієнта, щоб отримати поточну кімнату
+			c, ok := s.Hub.Clients[anonID]
+			if !ok {
+				c = &Client{
+					AnonID:  anonID,
+					Hub:     s.Hub,
+					Send:    make(chan models.ChatMessage, 10),
+					BotAPI:  s.BotAPI,
+					Storage: s.Storage,
+				}
+				s.Hub.RegisterCh <- c
+				go c.Run()
+			}
 
 			chatMsg := models.ChatMessage{
-				SenderID: senderID,
-				RoomID:   strconv.FormatInt(msg.Chat.ID, 10),
+				SenderID: anonID,
+				RoomID:   c.GetRoomID(),
 				Type:     "edit",
 				Content:  msg.Text,
 			}
@@ -50,7 +66,8 @@ func (s *BotService) Run() {
 			// Якщо це було редагування відповіді на ботське повідомлення
 			if msg.ReplyToMessage != nil && msg.ReplyToMessage.From != nil && msg.ReplyToMessage.From.IsBot {
 				chatMsg.Type = "reply"
-				chatMsg.Metadata = msg.ReplyToMessage.Text
+				// Передаємо ID оригінального бот-повідомлення, щоб відповіді були ниткою
+				//chatMsg.Metadata = strconv.Itoa(msg.ReplyToMessage.MessageID)
 			}
 
 			s.Hub.IncomingCh <- chatMsg
@@ -69,19 +86,52 @@ func (s *BotService) Run() {
 		c, ok := s.Hub.Clients[anonID]
 		if !ok {
 			c = &Client{
-				AnonID: anonID,
-				Hub:    s.Hub,
-				Send:   make(chan models.ChatMessage, 10),
-				BotAPI: s.BotAPI,
+				AnonID:  anonID,
+				Hub:     s.Hub,
+				Send:    make(chan models.ChatMessage, 10),
+				BotAPI:  s.BotAPI,
+				Storage: s.Storage,
 			}
 			s.Hub.RegisterCh <- c
 			go c.Run()
 		}
 
 		// 🟢 2. Create a ChatMessage
+		// 1. Оголошуємо змінну типу *uint (вона за замовчуванням буде nil)
+		var tgMessageIDSender *uint
+		// 2. Перевіряємо, чи є MessageID валідним (> 0)
+		if msg.MessageID > 0 {
+			// 3. Конвертуємо int у uint і зберігаємо в тимчасовій змінній
+			tempID := uint(msg.MessageID)
+
+			// 4. Беремо адресу тимчасової змінної, щоб отримати *uint
+			tgMessageIDSender = &tempID
+		}
+
 		chatMsg := models.ChatMessage{
-			SenderID: anonID,
-			RoomID:   c.GetRoomID(),
+			TgMessageIDSender: tgMessageIDSender,
+			SenderID:          anonID,
+			RoomID:            c.GetRoomID(),
+		}
+
+		log.Printf("ReplyingReplyingReplying %d", msg.ReplyToMessage)
+
+		// Якщо користувач відповів на повідомлення
+		if msg.ReplyToMessage != nil && msg.ReplyToMessage.From != nil {
+			// 1. Отримуємо Telegram Message ID, на яке відповіли
+			replyTGID := uint(msg.ReplyToMessage.MessageID)
+
+			// 2. ЗНАЙТИ ВНУТРІШНІЙ CHAT HISTORY ID ЗА TG ID
+			originalHistoryID, err := s.Storage.FindOriginalHistoryIDByTgID(replyTGID)
+
+			if err != nil {
+				log.Printf("ERROR: Failed to find original history ID: %v", err)
+				// Можемо продовжити без реплаю
+			} else if originalHistoryID != nil {
+				// Встановлюємо ChatHistory.ID як посилання на реплай
+				chatMsg.ReplyToMessageID = originalHistoryID
+				chatMsg.Type = "reply"
+			}
 		}
 
 		switch {
@@ -93,8 +143,19 @@ func (s *BotService) Run() {
 				switch msg.Command() {
 				case "start":
 					chatMsg.Type = "command_start"
+
 				case "stop":
 					chatMsg.Type = "command_stop"
+
+				case "next":
+					chatMsg.Type = "command_next"
+
+				case "settings":
+					chatMsg.Type = "command_settings"
+
+				case "report":
+					chatMsg.Type = "command_report"
+
 				default:
 					c.GetSendChannel() <- models.ChatMessage{
 						Type:    "system_info",
@@ -135,7 +196,7 @@ func (s *BotService) Run() {
 		default:
 			c.GetSendChannel() <- models.ChatMessage{
 				Type:    "system_info",
-				Content: "⚠️ Цей тип повідомлення поки що не підтримується.",
+				Content: "⚠️ Цей тип повідомлення не підтримується.",
 			}
 			continue
 		}
@@ -148,6 +209,7 @@ func (s *BotService) Run() {
 			}
 			continue
 		}
+		log.Printf("🟢🟢🟢 sending")
 
 		// 🟢 4. Forward message into Hub
 		s.Hub.IncomingCh <- chatMsg

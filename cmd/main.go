@@ -7,9 +7,11 @@ import (
 	"chatgogo/backend/internal/storage"
 	"chatgogo/backend/internal/telegram"
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -19,37 +21,82 @@ import (
 	"gorm.io/gorm"
 )
 
-func setupDependencies() (*gorm.DB, *redis.Client) {
-	// 1. PostgreSQL (Використовуємо дані з docker-compose)
-	dsn := "host=localhost user=user password=password dbname=chatgogodb port=5432 sslmode=disable"
+const maxRetries = 5                 // Максимальна кількість спроб підключення
+const initialDelay = 2 * time.Second // Затримка між спробами
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	if err != nil {
-		log.Fatalf("Failed to connect PostgreSQL: %v", err)
+func setupDependencies() (*gorm.DB, *redis.Client) {
+	// 1. PostgreSQL
+	log.Println("Initializing PostgreSQL connection...")
+
+	dbHost := os.Getenv("DB_HOST")
+	dbPort := os.Getenv("DB_PORT")
+	dbUser := os.Getenv("DB_USER")
+	dbPassword := os.Getenv("DB_PASSWORD")
+	dbName := os.Getenv("DB_NAME")
+
+	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable",
+		dbHost, dbUser, dbPassword, dbName, dbPort)
+
+	// FIX: Declare db and err outside the loop scope
+	var db *gorm.DB
+	var err error
+
+	for i := 0; i < maxRetries; i++ {
+		db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+		if err == nil {
+			// Успішне підключення
+			log.Println("PostgreSQL connection established.")
+			break
+		}
+
+		log.Printf("Failed to connect PostgreSQL (Attempt %d/%d). Retrying in %v: %v", i+1, maxRetries, initialDelay, err)
+
+		if i == maxRetries-1 {
+			// Якщо це була остання спроба, зупиняємо додаток
+			log.Fatalf("Failed to connect PostgreSQL after %d attempts: %v", maxRetries, err)
+		}
+
+		time.Sleep(initialDelay)
 	}
 
 	// 2. Redis
+	log.Println("Initializing Redis connection...")
+
+	redisAddr := os.Getenv("REDIS_ADDR")
+	redisPassword := os.Getenv("REDIS_PASSWORD")
+	redisDBStr := os.Getenv("REDIS_DB")
+	redisDB := 0 // За замовчуванням
+
+	if redisDBStr != "" {
+		// Конвертуємо номер бази даних з рядка в int
+		var parseErr error
+		redisDB, parseErr = strconv.Atoi(redisDBStr)
+		if parseErr != nil {
+			log.Printf("Warning: Invalid REDIS_DB value '%s'. Using default DB 0.", redisDBStr)
+			redisDB = 0
+		}
+	}
+
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6380",
-		Password: "",
-		DB:       0,
+		Addr:     redisAddr,
+		Password: redisPassword,
+		DB:       redisDB,
 	})
 
 	// Перевірка з'єднання Redis
 	ctx := context.Background()
 	if _, err := rdb.Ping(ctx).Result(); err != nil {
-		log.Fatalf("Failed to connect Redis: %v", err)
+		log.Fatalf("Failed to connect Redis at %s: %v", redisAddr, err)
 	}
 
 	// 3. Міграції (Створення таблиць)
-	// ВАЖЛИВО: Потрібно імпортувати всі моделі з internal/models
 	err = db.AutoMigrate(
 		&models.ChatRoom{},
-		&models.User{}, // Додайте всі моделі, які ви використовуєте
-		// &models.Complaint{},
+		&models.User{},
+		&models.Complaint{},
+		&models.ChatHistory{},
 	)
 	if err != nil {
-		// Якщо міграція не спрацювала, зупиняємо додаток
 		log.Fatalf("Failed to run migrations: %v", err)
 	}
 
@@ -60,6 +107,7 @@ func setupDependencies() (*gorm.DB, *redis.Client) {
 func main() {
 	log.Println("Starting ChatGoGo Backend...")
 
+	// Завантаження змінних середовища з .env
 	err := godotenv.Load()
 	if err != nil {
 		log.Println("Warning: Error loading .env file")
@@ -73,11 +121,12 @@ func main() {
 	hub := chathub.NewManagerService(s)
 	matcher := chathub.NewMatcherService(hub, s)
 
+	// Telegram Bot Token
 	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
 	if botToken == "" {
-		log.Fatal("TELEGRAM_BOT_TOKEN не встановлено!")
+		log.Fatal("TELEGRAM_BOT_TOKEN не встановлено! Перевірте файл .env або змінні середовища.")
 	}
-	botService, err := telegram.NewBotService(botToken, hub)
+	botService, err := telegram.NewBotService(botToken, hub, s)
 	if err != nil {
 		log.Fatalf("Не вдалося запустити Telegram-бота: %v", err)
 	}
@@ -96,7 +145,7 @@ func main() {
 	r.GET("/ws", h.ServeWebSocket) // WebSocket Upgrade
 
 	// Запуск HTTP-сервера
-	server := &http.Server{ // <--- Змінили s на server
+	server := &http.Server{
 		Addr:           ":8080",
 		Handler:        r,
 		ReadTimeout:    10 * time.Second,

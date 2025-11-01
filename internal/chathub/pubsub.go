@@ -124,6 +124,110 @@ func (m *ManagerService) Run() {
 					}
 				}
 
+			case "command_next":
+				log.Printf("Handling 'command_next' from %s", msg.SenderID)
+
+				roomID := msg.RoomID // Отримуємо RoomID, який надіслав клієнт
+
+				// 1. ЛОГІКА ЗАВЕРШЕННЯ ЧАТУ (аналогічно command_stop)
+				if roomID != "" {
+					// 1.1. Створюємо системне повідомлення про вихід для партнера
+					partnerMessage := models.ChatMessage{
+						Type:     "system_match_stop_partner",
+						SenderID: "system",
+						RoomID:   roomID,
+						Content:  "Співрозмовник покинув чат та почав пошук нового.",
+					}
+
+					// 1.2. Публікуємо повідомлення для всіх інших серверів (якщо є)
+					// Інші клієнти в цій кімнаті отримають це повідомлення
+					m.Storage.PublishMessage(roomID, partnerMessage)
+
+					// 1.3. Скидаємо RoomID ініціатора (це відбудеться і в tg_client, але для Hub робимо тут)
+					if initiatorClient, ok := m.Clients[msg.SenderID]; ok {
+						initiatorClient.SetRoomID("")
+						// Повідомлення для ініціатора про успішне завершення
+						initiatorClient.GetSendChannel() <- models.ChatMessage{
+							Type:    "system_info",
+							Content: "Чат завершено. 🔄 Починаємо пошук нового співрозмовника...",
+						}
+					}
+				} else {
+					// Якщо клієнт не був у чаті
+					if client, ok := m.Clients[msg.SenderID]; ok {
+						client.GetSendChannel() <- models.ChatMessage{
+							Type:     "system_info",
+							SenderID: "system",
+							Content:  "Ви не були в активному чаті. 🔄 Починаємо пошук...",
+						}
+					}
+				}
+
+				// 2. ЛОГІКА ПОЧАТКУ ПОШУКУ (аналогічно command_start)
+				// Створюємо запит на пошук і надсилаємо його Matcher'у
+				request := models.SearchRequest{
+					UserID: msg.SenderID,
+					// ... інші параметри пошуку ...
+				}
+				m.MatchRequestCh <- request
+
+			case "command_settings":
+				log.Printf("Handling 'command_settings' from %s", msg.SenderID)
+
+				if client, ok := m.Clients[msg.SenderID]; ok {
+					// Надсилаємо клієнту системне повідомлення.
+					// TgClient має перетворити це на Telegram-повідомлення з INLINE-кнопками.
+					client.GetSendChannel() <- models.ChatMessage{
+						Type:     "system_settings_menu", // Новий тип для Telegram
+						SenderID: "system",
+						Content:  "⚙️ Виберіть налаштування, які хочете змінити.",
+						// У `Metadata` можна додати JSON із даними для формування inline-клавіатури
+						Metadata: `{"buttons": [{"text": "Стать", "callback_data": "settings_gender"}, {"text": "Мова", "callback_data": "settings_lang"}]}`,
+					}
+				}
+
+			case "command_report":
+				log.Printf("Handling 'command_report' from %s", msg.SenderID)
+
+				if client, ok := m.Clients[msg.SenderID]; ok {
+					roomID := client.GetRoomID()
+
+					// Перевіряємо, чи є активний чат
+					if roomID == "" {
+						client.GetSendChannel() <- models.ChatMessage{
+							Type:     "system_info",
+							SenderID: "system",
+							Content:  "⚠️ Немає активного чату, щоб поскаржитися.",
+						}
+						continue
+					}
+
+					// 1. Створюємо об'єкт скарги
+					complaint := &models.Complaint{
+						RoomID:     roomID,
+						ReporterID: msg.SenderID,
+						Reason:     msg.Content, // Можливо, користувач вказав причину після /report
+						Status:     "pending",
+						// TODO: Завантажте історію повідомлень з Redis/DB та додайте її
+					}
+
+					// 2. Зберігаємо скаргу
+					if err := m.Storage.SaveComplaint(complaint); err != nil {
+						log.Printf("ERROR saving complaint for room %s: %v", roomID, err)
+						client.GetSendChannel() <- models.ChatMessage{
+							Type:     "system_error",
+							SenderID: "system",
+							Content:  "❌ Не вдалося зберегти скаргу. Спробуйте пізніше.",
+						}
+					} else {
+						client.GetSendChannel() <- models.ChatMessage{
+							Type:     "system_info",
+							SenderID: "system",
+							Content:  "✅ Дякуємо! Ваша скарга прийнята та буде розглянута модераторами.",
+						}
+					}
+				}
+
 			case "text", "photo", "sticker", "video", "voice", "animation", "video_note", "reply", "edit":
 				// Це звичайне текстове повідомлення
 				if msg.RoomID == "" {
@@ -142,6 +246,12 @@ func (m *ManagerService) Run() {
 				}
 
 				// 1. Збереження в БД (Storage.SaveMessage)
+				if err := m.Storage.SaveMessage(&msg); err != nil {
+					log.Printf("ERROR: Failed to save message history for room %s: %v", msg.RoomID, err)
+					// Надсилаємо системне повідомлення про помилку, якщо потрібно
+					continue
+				}
+
 				// 2. Публікація через Redis
 				m.Storage.PublishMessage(msg.RoomID, msg)
 
@@ -201,7 +311,6 @@ func (m *ManagerService) Run() {
 			default:
 				log.Printf("Unknown message type received: %s from %s", msg.Type, msg.SenderID)
 			}
-			// Вхідне повідомлення від клієнта (через ReadPump)
 		}
 	}
 }
