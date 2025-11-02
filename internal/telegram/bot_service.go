@@ -62,12 +62,17 @@ func (s *BotService) Run() {
 			// 4. Беремо адресу тимчасової змінної, щоб отримати *uint
 			tgMessageIDSender = &tempID
 
+			editedContent := msg.Text
+			if editedContent == "" {
+				editedContent = msg.Caption
+			}
+
 			chatMsg := models.ChatMessage{
 				SenderID:          anonID,
 				TgMessageIDSender: tgMessageIDSender,
 				RoomID:            c.GetRoomID(),
 				Type:              "edit",
-				Content:           msg.Text,
+				Content:           editedContent,
 			}
 
 			// 1. Отримуємо Telegram Message ID, яке відредаговане
