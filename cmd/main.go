@@ -62,7 +62,9 @@ func setupDependencies() (*gorm.DB, *redis.Client) {
 	// 2. Redis
 	log.Println("Initializing Redis connection...")
 
-	redisAddr := os.Getenv("REDIS_ADDR")
+	redisHost := os.Getenv("REDIS_HOST")
+	redisPort := os.Getenv("REDIS_PORT")
+	redisAddr := fmt.Sprintf("%s:%s", redisHost, redisPort)
 	redisPassword := os.Getenv("REDIS_PASSWORD")
 	redisDBStr := os.Getenv("REDIS_DB")
 	redisDB := 0 // За замовчуванням
