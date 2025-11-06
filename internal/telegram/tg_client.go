@@ -108,11 +108,45 @@ func (c *Client) writePump() {
 	}
 }
 
-// --- Нове: фабрика повідомлень ---
 func (c *Client) buildTelegramMessage(chatID int64, message models.ChatMessage) tgbotapi.Chattable {
 	//const parseMode = tgbotapi.ModeMarkdownV2
 	const parseMode = tgbotapi.ModeMarkdown
 	content := escapeMarkdownV2(message.Content)
+	//metadata := escapeMarkdownV2(message.Metadata)
+
+	// --- 1. Обробка РЕДАГУВАННЯ (edit) ---
+	if message.Type == "edit" {
+		// Ми очікуємо, що Hub встановив TgMessageIDSender у TG ID повідомлення партнера, яке потрібно редагувати.
+		if message.TgMessageIDSender == nil {
+			log.Printf("ERROR: Cannot edit message without partner's TgMessageID. Sending as new message.")
+			// Fallback: Відправити як нове повідомлення (стара логіка)
+			msg := tgbotapi.NewMessage(chatID, "✏️ *Редаговано:*\n"+content)
+			msg.ParseMode = parseMode
+			return msg
+		}
+
+		tgIDToEdit := int(*message.TgMessageIDSender)
+
+		// 1.1. Редагування Caption (якщо є Metadata, це медіа, Content - це новий Caption)
+		if message.Metadata != "" {
+			editConfig := tgbotapi.NewEditMessageCaption(
+				chatID,
+				tgIDToEdit,
+				content, // Content - це НОВИЙ Caption
+			)
+			editConfig.ParseMode = parseMode
+			return editConfig
+		}
+
+		// 1.2. Редагування тексту
+		editConfig := tgbotapi.NewEditMessageText(
+			chatID,
+			tgIDToEdit,
+			content,
+		)
+		editConfig.ParseMode = parseMode
+		return editConfig
+	}
 
 	switch message.Type {
 	case "text", "system_info":
@@ -120,12 +154,21 @@ func (c *Client) buildTelegramMessage(chatID int64, message models.ChatMessage) 
 		msg.ParseMode = parseMode
 		return msg
 
-	case "edit":
-		msg := tgbotapi.NewMessage(chatID, "✏️ *Редаговано:*\n"+content)
-		msg.ParseMode = parseMode
-		return msg
-
 	case "photo", "video", "animation":
+		if message.ReplyToMessageID != nil {
+			originalHistory, err := c.Storage.FindHistoryByID(*message.ReplyToMessageID)
+
+			if err != nil || originalHistory == nil {
+				log.Printf("ERROR: Failed to fetch original history record %d: %v", *message.ReplyToMessageID, err)
+			}
+
+			if originalHistory.Content == message.Content {
+				msg := tgbotapi.NewMessage(chatID, message.Metadata)
+				msg.ParseMode = parseMode
+				return msg
+			}
+
+		}
 		if message.Content == "" {
 			log.Printf("ERROR: Media message (%s) missing FileID", message.Type)
 			return nil
@@ -181,7 +224,7 @@ func (c *Client) buildTelegramMessage(chatID int64, message models.ChatMessage) 
 		return msg
 
 	default:
-		log.Printf("Unhandled message type: %s", message.Type)
+		log.Printf("Unhandled message type in buildTelegramMessage: %s", message.Type)
 		msg := tgbotapi.NewMessage(chatID, "⚠️ Непідтримуваний тип повідомлення.")
 		msg.ParseMode = parseMode
 		return msg

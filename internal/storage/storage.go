@@ -21,6 +21,7 @@ type Storage interface {
 	SaveTgMessageID(historyID uint, anonID string, tgMsgID int) error
 	FindPartnerTelegramIDForReply(originalHistoryID uint, currentRecipientAnonID string) (*int, error)
 	FindOriginalHistoryIDByTgID(tgMsgID uint) (*uint, error)
+	FindHistoryByID(id uint) (*models.ChatHistory, error)
 }
 
 type Service struct {
@@ -199,4 +200,21 @@ func (s *Service) FindPartnerTelegramIDForReply(originalHistoryID uint, currentR
 	}
 	tgID := int(*history.TgMessageIDReceiver)
 	return &tgID, nil
+}
+
+// FindHistoryByID повертає повний запис ChatHistory за його внутрішнім ID (gorm.Model.ID).
+func (s *Service) FindHistoryByID(id uint) (*models.ChatHistory, error) {
+	var history models.ChatHistory
+
+	// Використовуємо .First() для пошуку за первинним ключем (ID)
+	err := s.DB.First(&history, id).Error
+
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil // Якщо запис не знайдено, повертаємо nil без помилки
+	}
+	if err != nil {
+		return nil, err // Помилка бази даних
+	}
+
+	return &history, nil
 }

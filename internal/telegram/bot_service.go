@@ -80,35 +80,69 @@ func (s *BotService) getOrCreateClient(chatID int64) *Client {
 	return newClient
 }
 
-// handleEditedMessage обробляє відредаговані повідомлення
+// handleEditedMessage обробляє відредаговані повідомлення (ОНОВЛЕНО)
 func (s *BotService) handleEditedMessage(msg *tgbotapi.Message) {
 	anonID := strconv.FormatInt(msg.Chat.ID, 10)
 	c := s.getOrCreateClient(msg.Chat.ID)
 
-	content := extractMessageContent(msg)
-	if content == "" {
-		log.Println("Ignoring media edit without caption.")
-		return // Ігноруємо редагування медіа без зміни тексту
-	}
-
-	tempID := uint(msg.MessageID)
-
-	chatMsg := models.ChatMessage{
-		SenderID:          anonID,
-		TgMessageIDSender: &tempID,
-		RoomID:            c.GetRoomID(),
-		Type:              "edit",
-		Content:           content,
-	}
-
+	// 1. Знаходимо оригінальний ID історії
 	editedTGID := uint(msg.MessageID)
 	originalHistoryID, err := s.Storage.FindOriginalHistoryIDByTgID(editedTGID)
-	if err != nil {
-		log.Printf("ERROR: FindOriginalHistoryIDByTgID failed: %v", err)
-	} else if originalHistoryID != nil {
-		chatMsg.ReplyToMessageID = originalHistoryID
+	if err != nil || originalHistoryID == nil {
+		log.Printf("ERROR/WARN: Ignoring edit for un-tracked TG ID %d: %v", editedTGID, err)
+		return
 	}
 
+	// 2. Отримуємо ОРИГІНАЛЬНИЙ запис з історії (ПОТРІБНА РЕАЛІЗАЦІЯ В Storage)
+	originalHistory, err := s.Storage.FindHistoryByID(*originalHistoryID)
+	if err != nil || originalHistory == nil {
+		log.Printf("ERROR: Failed to fetch original history record %d: %v", *originalHistoryID, err)
+		return
+	}
+
+	// 3. Визначаємо новий тип, fileID та caption
+	newType, newFileID, newCaption := s.extractMediaInfo(msg)
+
+	chatMsg := models.ChatMessage{
+		SenderID: anonID,
+		// TgMessageIDSender міститиме TG ID повідомлення, яке потрібно відредагувати/відповісти партнеру (покладаємося на Hub)
+		// Нам потрібно лише передати TgMessageIDSender відправника (для оновлення БД)
+		TgMessageIDSender: &editedTGID,
+		RoomID:            c.GetRoomID(),
+		ReplyToMessageID:  originalHistoryID,
+	}
+
+	isMediaOriginal := originalHistory.Type != "text"
+
+	// --- A. Перевірка зміни file_id (Медіа) ---
+	if isMediaOriginal && newFileID != originalHistory.Content {
+		// 1. ФАЙЛ ЗМІНИВСЯ: Відправляємо НОВЕ медіа як відповідь на останнє.
+		// Хаб отримає: ReplyToMessageID (на оригінальне повідомлення), Type (photo/video), Content (new file ID).
+		chatMsg.Type = newType
+		chatMsg.Content = newFileID // Новий file ID
+		chatMsg.Metadata = newCaption
+
+		// --- B. Перевірка зміни тексту/caption ---
+	} else if newCaption != originalHistory.Metadata && isMediaOriginal {
+		// 2. Змінився ЛИШЕ caption медіа
+		chatMsg.Type = newType
+		chatMsg.Content = originalHistory.Content // Старий fileID (для tg_client, щоб знати, що редагувати Caption)
+		chatMsg.Metadata = newCaption             // Новий caption
+
+		//} else if (isMediaOriginal && ) {
+
+	} else if newCaption != originalHistory.Content && !isMediaOriginal && newType == "text" {
+		// 3. Змінився ЛИШЕ текст текстового повідомлення
+		chatMsg.Type = "edit"
+		chatMsg.Content = newCaption
+		chatMsg.Metadata = "" // Це текстове повідомлення
+
+	} else {
+		// Нічого не змінилося або не підтримується
+		return
+	}
+
+	// 4. Надсилаємо в Hub
 	s.Hub.IncomingCh <- chatMsg
 }
 
@@ -215,6 +249,39 @@ func (s *BotService) handleTextMessage(c *Client, msg *tgbotapi.Message, chatMsg
 			Content: "❌ Невідома команда. Використовуйте /start або /stop.",
 		}
 	}
+}
+
+// extractMediaInfo уніфіковано витягує тип, fileID та caption з повідомлення
+// Потрібно використовувати як msg.*, так і msg.Caption
+func (s *BotService) extractMediaInfo(msg *tgbotapi.Message) (msgType string, fileID string, caption string) {
+	caption = extractMessageContent(msg) // extractMessageContent бере Text або Caption
+
+	switch {
+	case msg.Photo != nil:
+		msgType = "photo"
+		largestPhoto := msg.Photo[len(msg.Photo)-1]
+		fileID = largestPhoto.FileID
+	case msg.Video != nil:
+		msgType = "video"
+		fileID = msg.Video.FileID
+	case msg.Animation != nil:
+		msgType = "animation"
+		fileID = msg.Animation.FileID
+	case msg.Sticker != nil:
+		msgType = "sticker"
+		fileID = msg.Sticker.FileID
+	case msg.Voice != nil:
+		msgType = "voice"
+		fileID = msg.Voice.FileID
+	case msg.VideoNote != nil:
+		msgType = "video_note"
+		fileID = msg.VideoNote.FileID
+	default:
+		// Якщо немає медіа і є текст/caption (це вже в змінній caption)
+		msgType = "text"
+		fileID = ""
+	}
+	return msgType, fileID, caption
 }
 
 // Run — головний цикл отримання Telegram-оновлень
