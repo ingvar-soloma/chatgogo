@@ -87,7 +87,7 @@ func (s *BotService) handleEditedMessage(msg *tgbotapi.Message) {
 
 	// 1. Знаходимо оригінальний ID історії
 	editedTGID := uint(msg.MessageID)
-	originalHistoryID, err := s.Storage.FindOriginalHistoryIDByTgID(editedTGID)
+	originalHistoryID, err := s.Storage.FindOriginalHistoryIDByTgIDMedia(editedTGID)
 	if err != nil || originalHistoryID == nil {
 		log.Printf("ERROR/WARN: Ignoring edit for un-tracked TG ID %d: %v", editedTGID, err)
 		return

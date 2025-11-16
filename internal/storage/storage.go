@@ -21,6 +21,7 @@ type Storage interface {
 	SaveTgMessageID(historyID uint, anonID string, tgMsgID int) error
 	FindPartnerTelegramIDForReply(originalHistoryID uint, currentRecipientAnonID string) (*int, error)
 	FindOriginalHistoryIDByTgID(tgMsgID uint) (*uint, error)
+	FindOriginalHistoryIDByTgIDMedia(tgMsgID uint) (*uint, error)
 	FindHistoryByID(id uint) (*models.ChatHistory, error)
 }
 
@@ -175,6 +176,44 @@ func (s *Service) FindOriginalHistoryIDByTgID(tgMsgID uint) (*uint, error) {
 
 	// Повертаємо внутрішній ID (gorm.Model.ID)
 	return &history.ID, nil
+}
+
+func (s *Service) FindOriginalHistoryIDByTgIDMedia(tgMsgID uint) (*uint, error) {
+	// Складний запит, що використовує DISTINCT ON (PostgreSQL) для групування
+	// за унікальним контентом (file_id) та вибору останнього (найновішого) запису.
+	rawSQL := `
+        SELECT id
+        FROM (
+            -- 1. Знаходимо найновіший запис (за created_at DESC) для кожного унікального Content (file_id)
+            SELECT DISTINCT ON (content)
+                id,
+                created_at
+            FROM 
+                chat_histories
+            WHERE 
+                tg_message_id_sender = ? OR tg_message_id_receiver = ?
+            ORDER BY 
+                content, 
+                created_at ASC -- ⬅️ Вибираємо найстаріший запис у кожній групі 'content'
+        ) AS latest_groups
+        ORDER BY 
+            created_at DESC -- 2. Вибираємо АБСОЛЮТНО найновіший запис серед усіх цих груп
+        LIMIT 1
+    `
+
+	var resultID uint
+
+	// Використовуємо Raw та Scan. Передаємо tgMsgID двічі для двох плейсхолдерів '?'
+	err := s.DB.Raw(rawSQL, tgMsgID, tgMsgID).Scan(&resultID).Error
+
+	if errors.Is(err, gorm.ErrRecordNotFound) || resultID == 0 {
+		return nil, nil // Не знайдено
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &resultID, nil
 }
 
 func (s *Service) FindPartnerTelegramIDForReply(originalHistoryID uint, currentRecipientAnonID string) (*int, error) {
