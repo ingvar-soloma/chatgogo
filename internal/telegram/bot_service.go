@@ -123,7 +123,7 @@ func (s *BotService) handleEditedMessage(msg *tgbotapi.Message) {
 		chatMsg.Metadata = newCaption
 
 		// --- B. Перевірка зміни тексту/caption ---
-	} else if newCaption != originalHistory.Metadata && isMediaOriginal {
+	} else if isMediaOriginal && newCaption != originalHistory.Metadata {
 		// 2. Змінився ЛИШЕ caption медіа
 		chatMsg.Type = newType
 		chatMsg.Content = originalHistory.Content // Старий fileID (для tg_client, щоб знати, що редагувати Caption)
@@ -131,9 +131,9 @@ func (s *BotService) handleEditedMessage(msg *tgbotapi.Message) {
 
 		//} else if (isMediaOriginal && ) {
 
-	} else if newCaption != originalHistory.Content && !isMediaOriginal && newType == "text" {
+	} else if !isMediaOriginal && newCaption != originalHistory.Content {
 		// 3. Змінився ЛИШЕ текст текстового повідомлення
-		chatMsg.Type = "edit"
+		chatMsg.Type = "text"
 		chatMsg.Content = newCaption
 		chatMsg.Metadata = "" // Це текстове повідомлення
 
