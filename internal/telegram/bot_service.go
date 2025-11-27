@@ -148,13 +148,20 @@ func (s *BotService) handleEditedMessage(msg *tgbotapi.Message) {
 
 // handleIncomingMessage обробляє нові повідомлення користувачів
 func (s *BotService) handleIncomingMessage(msg *tgbotapi.Message) {
-	anonID := strconv.FormatInt(msg.Chat.ID, 10)
+	telegramID := strconv.FormatInt(msg.Chat.ID, 10)
+
+	if err := s.Storage.SaveUserIfNotExists(telegramID); err != nil {
+		log.Printf("FATAL: Failed to ensure user %s exists in DB: %v", telegramID, err)
+		// Обробка помилки (наприклад, відповісти користувачу про тимчасові проблеми)
+		return
+	}
+
 	c := s.getOrCreateClient(msg.Chat.ID)
 
 	tempID := uint(msg.MessageID)
 	chatMsg := models.ChatMessage{
 		TgMessageIDSender: &tempID,
-		SenderID:          anonID,
+		SenderID:          telegramID,
 		RoomID:            c.GetRoomID(),
 	}
 

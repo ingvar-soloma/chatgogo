@@ -14,15 +14,20 @@ import (
 type Storage interface {
 	SaveUser(user *models.User) error
 	SaveRoom(room *models.ChatRoom) error
-	IsUserBanned(anonID string) (bool, error)
-	PublishMessage(roomID string, msg models.ChatMessage) error
 	SaveComplaint(complaint *models.Complaint) error
-
 	SaveTgMessageID(historyID uint, anonID string, tgMsgID int) error
+	SaveUserIfNotExists(telegramID string) error
+
+	PublishMessage(roomID string, msg models.ChatMessage) error
+
+	IsUserBanned(anonID string) (bool, error)
+
 	FindPartnerTelegramIDForReply(originalHistoryID uint, currentRecipientAnonID string) (*int, error)
 	FindOriginalHistoryIDByTgID(tgMsgID uint) (*uint, error)
 	FindOriginalHistoryIDByTgIDMedia(tgMsgID uint) (*uint, error)
 	FindHistoryByID(id uint) (*models.ChatHistory, error)
+
+	GetActiveRoomIDForUser(userID string) (string, error)
 }
 
 type Service struct {
@@ -256,4 +261,79 @@ func (s *Service) FindHistoryByID(id uint) (*models.ChatHistory, error) {
 	}
 
 	return &history, nil
+}
+
+// GetActiveRoomIDs повертає список усіх RoomID, які є активними в даний момент.
+func (s *Service) GetActiveRoomIDs() ([]string, error) {
+	var roomIDs []string
+
+	// Обираємо лише RoomID з усіх записів, де IsActive = true
+	if err := s.DB.Model(&models.ChatRoom{}).
+		Where("is_active = ?", true).
+		Pluck("room_id", &roomIDs).Error; err != nil {
+
+		log.Printf("ERROR: Failed to retrieve active RoomIDs: %v", err)
+		return nil, err
+	}
+	return roomIDs, nil
+}
+
+// GetActiveRoomIDForUser знаходить активний RoomID, в якому бере участь даний користувач.
+func (s *Service) GetActiveRoomIDForUser(userID string) (string, error) {
+	var room models.ChatRoom
+
+	// Шукаємо кімнату, де користувач є User1ID АБО User2ID, і вона активна.
+	err := s.DB.Where("is_active = ?", true).
+		Where("user1_id = ? OR user2_id = ?", userID, userID).
+		First(&room).Error // First() вибирає один запис
+
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", nil // Користувач не перебуває в активній кімнаті
+	}
+	if err != nil {
+		log.Printf("ERROR: Failed to find active room for user %s: %v", userID, err)
+		return "", err
+	}
+
+	return room.RoomID, nil
+}
+
+func (s *Service) GetRoomByID(roomID string) (*models.ChatRoom, error) {
+	var room models.ChatRoom
+
+	err := s.DB.Where("room_id = ?", roomID).First(&room).Error
+
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, errors.New("chat room not found")
+	}
+	if err != nil {
+		log.Printf("ERROR: Failed to get room %s: %v", roomID, err)
+		return nil, err
+	}
+	return &room, nil
+}
+func (s *Service) SaveUserIfNotExists(telegramID string) error {
+	var user models.User
+
+	// Створюємо запис, який буде використовуватися, якщо користувача не знайдено
+	defaults := models.User{
+		TelegramID: telegramID, // Встановлюємо Telegram Chat ID
+		// Інші поля за замовчуванням
+	}
+
+	// 1. Шукаємо існуючого користувача по AnonID
+	// Примітка: Оскільки AnonID є унікальним, ми шукаємо по ньому.
+	result := s.DB.Where("telegram_id = ?", telegramID).FirstOrCreate(&user, defaults)
+
+	if result.Error != nil {
+		log.Printf("ERROR: Failed to save user %s on first contact: %v", telegramID, result.Error)
+		return result.Error
+	}
+
+	if result.RowsAffected > 0 {
+		// Користувач був створений.
+		log.Printf("INFO: New user %s saved to database (AnonID: %s).", user.ID, telegramID)
+	}
+
+	return nil
 }

@@ -17,7 +17,7 @@ services:
     ports:
       - "6380:6379"
 
-      backend:
+  backend:
     build:
       context: .
       dockerfile: Dockerfile

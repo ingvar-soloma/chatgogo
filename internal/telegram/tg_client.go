@@ -200,7 +200,7 @@ func (c *Client) buildTelegramMessage(chatID int64, message models.ChatMessage) 
 	case "video_note":
 		return tgbotapi.NewVideoNote(chatID, 0, tgbotapi.FileID(message.Content))
 
-	case "system_search_start":
+	case "system_search_start", "system_reconnect":
 		msg := tgbotapi.NewMessage(chatID, content)
 		msg.ParseMode = parseMode
 		return msg

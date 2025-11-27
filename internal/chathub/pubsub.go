@@ -69,6 +69,10 @@ func (m *ManagerService) Run() {
 	// 1. Запускаємо Goroutine, яка слухатиме Redis (для горизонтального масштабування)
 	m.StartPubSubListener()
 
+	// --- ВІДНОВЛЕННЯ ---
+	m.RecoverActiveRooms()
+	// --------------------------------
+
 	log.Println("Chat Hub Manager started and listening to channels...")
 
 	for {
@@ -77,6 +81,21 @@ func (m *ManagerService) Run() {
 			// Новий клієнт підключився (WebSocket/TG)
 			m.Clients[client.GetAnonID()] = client
 			log.Printf("Client registered: %s", client.GetAnonID())
+
+			// !!! Перевірка на активну кімнату !!!
+			// Отримуємо RoomID клієнта з БД. Якщо є, встановлюємо його.
+			activeRoomID, err := m.Storage.GetActiveRoomIDForUser(client.GetAnonID())
+			if err == nil && activeRoomID != "" {
+				client.SetRoomID(activeRoomID)
+				log.Printf("Client %s reconnected and restored to room %s.", client.GetAnonID(), activeRoomID)
+				// Можна надіслати повідомлення про повторне підключення
+				client.GetSendChannel() <- models.ChatMessage{
+					Type:     "system_reconnect",
+					SenderID: "system",
+					RoomID:   activeRoomID,
+					Content:  "🎉 Ви успішно відновили з'єднання з чатом!",
+				}
+			}
 
 		case client := <-m.UnregisterCh:
 			// Клієнт відключився
@@ -99,6 +118,18 @@ func (m *ManagerService) Run() {
 				// Це команда на пошук співрозмовника. Надсилаємо в Matcher.
 				log.Printf("Routing search command from %s to Matcher...", msg.SenderID)
 
+				if client, ok := m.Clients[msg.SenderID]; ok && client.GetRoomID() != "" {
+					log.Printf("Client %s is already in room %s. Ignoring search command.", msg.SenderID, client.GetRoomID())
+
+					// Повідомляємо клієнта, що він вже в чаті
+					client.GetSendChannel() <- models.ChatMessage{
+						Type:     "system_info",
+						SenderID: "system",
+						Content:  "❌ Ви вже перебуваєте в активному чаті. Скористайтеся /stop, щоб завершити поточний чат.",
+					}
+					continue // Ігноруємо подальшу обробку пошуку
+				}
+
 				// 1. Створюємо структуру SearchRequest
 				request := models.SearchRequest{
 					UserID: msg.SenderID,
@@ -111,7 +142,7 @@ func (m *ManagerService) Run() {
 				// 3. Надсилаємо клієнту системне повідомлення про початок пошуку
 				if client, ok := m.Clients[msg.SenderID]; ok {
 					searchStartMessage := models.ChatMessage{
-						Type:     "system_search_start", // ⬅️ НОВИЙ ТИП
+						Type:     "system_search_start",
 						SenderID: "system",
 						Content:  "🔍 *Пошук співрозмовника розпочато...* Очікуйте з'єднання.",
 						// RoomID тут порожній, оскільки кімнати ще немає
