@@ -13,7 +13,7 @@ import (
 func (m *ManagerService) StartPubSubListener() {
 	go func() {
 		ctx := context.Background()
-		pubsub := m.Storage.Redis.PSubscribe(ctx, "*")
+		pubsub := m.Storage.SubscribeToAllRooms()
 		defer pubsub.Close()
 
 		if _, err := pubsub.Receive(ctx); err != nil {
@@ -30,7 +30,7 @@ func (m *ManagerService) StartPubSubListener() {
 				log.Printf("ERROR: Failed to unmarshal Redis message payload: %v | Payload: %s", err, msg.Payload)
 				continue
 			}
-			m.pubSubChannel <- chatMsg
+			m.PubSubCh <- chatMsg
 		}
 	}()
 }

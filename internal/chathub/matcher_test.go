@@ -13,7 +13,7 @@ import (
 func TestMatcherQueueing(t *testing.T) {
 	// Arrange
 	storageMock := new(MockStorage)
-	hub := createTestHub(storageMock)
+	hub := chathub.NewManagerService(storageMock)
 	matcher := chathub.NewMatcherService(hub, storageMock)
 
 	// Act - Manually add to queue (direct access since we're in the same package conceptually)
@@ -30,7 +30,7 @@ func TestMatcherQueueing(t *testing.T) {
 func TestMatcherSuccessfulMatch_Integration(t *testing.T) {
 	// Arrange
 	storageMock := new(MockStorage)
-	hub := createTestHub(storageMock)
+	hub := chathub.NewManagerService(storageMock)
 	matcher := chathub.NewMatcherService(hub, storageMock)
 
 	// Create two mock clients
@@ -41,68 +41,21 @@ func TestMatcherSuccessfulMatch_Integration(t *testing.T) {
 
 	// Expect SaveRoom to be called
 	storageMock.On("SaveRoom", mock.AnythingOfType("*models.ChatRoom")).Return(nil).Once()
+	storageMock.On("RemoveUserFromSearchQueue", mock.AnythingOfType("string")).Return(nil)
 
 	// Act - Manually add both users to the queue
 	matcher.Queue["user_A"] = models.SearchRequest{UserID: "user_A"}
 	matcher.Queue["user_B"] = models.SearchRequest{UserID: "user_B"}
 
-	// Simulate what Run() would do: call the exported Queue directly
-	// Since we can't call findMatch, we verify the queue state manually
-	reqA := matcher.Queue["user_A"]
-	reqB := matcher.Queue["user_B"]
-
 	// Find a partner for reqA
-	found := false
-	for targetID := range matcher.Queue {
-		if targetID != reqA.UserID {
-			// This is the matching logic from findMatch
-			roomID := "test-room-123"
-			newRoom := &models.ChatRoom{
-				RoomID:   roomID,
-				User1ID:  reqA.UserID,
-				User2ID:  targetID,
-				IsActive: true,
-			}
-
-			err := storageMock.SaveRoom(newRoom)
-			assert.NoError(t, err)
-
-			// Set room IDs
-			if c1, ok := hub.Clients[reqA.UserID]; ok {
-				c1.SetRoomID(roomID)
-			}
-			if c2, ok := hub.Clients[targetID]; ok {
-				c2.SetRoomID(roomID)
-			}
-
-			// Send match notifications
-			matchMsg := models.ChatMessage{
-				RoomID:   roomID,
-				Content:  "Співрозмовника знайдено!",
-				Type:     "system_match_found",
-				SenderID: "system",
-			}
-			hub.Clients[reqA.UserID].GetSendChannel() <- matchMsg
-			hub.Clients[targetID].GetSendChannel() <- matchMsg
-
-			// Remove from queue
-			delete(matcher.Queue, reqA.UserID)
-			delete(matcher.Queue, targetID)
-
-			found = true
-			break
-		}
-	}
+	matcher.FindMatch(models.SearchRequest{UserID: "user_A"})
 
 	// Assert
-	assert.True(t, found, "Should have found a match")
 	storageMock.AssertExpectations(t)
 
-	_ = reqB // Used in loop
-
 	// Both clients should have room IDs
-	assert.Equal(t, "test-room-123", clientA.GetRoomID())
-	assert.Equal(t, "test-room-123", clientB.GetRoomID())
+	assert.NotEmpty(t, clientA.GetRoomID())
+	assert.Equal(t, clientA.GetRoomID(), clientB.GetRoomID())
 
 	// Queue should be empty
 	assert.Empty(t, matcher.Queue)
@@ -112,7 +65,7 @@ func TestMatcherSuccessfulMatch_Integration(t *testing.T) {
 func TestMatcherNoSelfMatch(t *testing.T) {
 	// Arrange
 	storageMock := new(MockStorage)
-	hub := createTestHub(storageMock)
+	hub := chathub.NewManagerService(storageMock)
 	matcher := chathub.NewMatcherService(hub, storageMock)
 
 	client := newMockClient("user_solo")
@@ -120,19 +73,9 @@ func TestMatcherNoSelfMatch(t *testing.T) {
 
 	// Act - Add only one user to queue
 	matcher.Queue["user_solo"] = models.SearchRequest{UserID: "user_solo"}
-
-	// Try to find match (simulate the logic)
-	req := matcher.Queue["user_solo"]
-	matchFound := false
-	for targetID := range matcher.Queue {
-		if targetID != req.UserID {
-			matchFound = true
-			break
-		}
-	}
+	matcher.FindMatch(models.SearchRequest{UserID: "user_solo"})
 
 	// Assert - No match should be found
-	assert.False(t, matchFound, "User should not match with themselves")
 	assert.Contains(t, matcher.Queue, "user_solo", "User should remain in queue")
 	assert.Empty(t, client.GetRoomID(), "Client should not have a room assigned")
 }
@@ -141,20 +84,25 @@ func TestMatcherNoSelfMatch(t *testing.T) {
 func TestMatcherQueueRemoval(t *testing.T) {
 	// Arrange
 	storageMock := new(MockStorage)
-	hub := createTestHub(storageMock)
+	hub := chathub.NewManagerService(storageMock)
 	matcher := chathub.NewMatcherService(hub, storageMock)
 
 	// Add two users
 	matcher.Queue["user_X"] = models.SearchRequest{UserID: "user_X"}
 	matcher.Queue["user_Y"] = models.SearchRequest{UserID: "user_Y"}
 
+	storageMock.On("SaveRoom", mock.AnythingOfType("*models.ChatRoom")).Return(nil).Once()
+	storageMock.On("RemoveUserFromSearchQueue", mock.AnythingOfType("string")).Return(nil)
+
+	clientA := newMockClient("user_X")
+	clientB := newMockClient("user_Y")
+	hub.Clients["user_X"] = clientA
+	hub.Clients["user_Y"] = clientB
+
 	// Act - Simulate match and removal
-	delete(matcher.Queue, "user_X")
-	delete(matcher.Queue, "user_Y")
+	matcher.FindMatch(models.SearchRequest{UserID: "user_X"})
 
 	// Assert
-	assert.NotContains(t, matcher.Queue, "user_X")
-	assert.NotContains(t, matcher.Queue, "user_Y")
 	assert.Empty(t, matcher.Queue, "Queue should be empty after both users matched")
 }
 
@@ -162,7 +110,7 @@ func TestMatcherQueueRemoval(t *testing.T) {
 func TestMatcherQueueStructure(t *testing.T) {
 	// Arrange
 	storageMock := new(MockStorage)
-	hub := createTestHub(storageMock)
+	hub := chathub.NewManagerService(storageMock)
 	matcher := chathub.NewMatcherService(hub, storageMock)
 
 	// Act - Add multiple unique users
@@ -182,14 +130,17 @@ func TestMatcherQueueStructure(t *testing.T) {
 	}
 }
 
-// Helper function to create a test hub with minimal setup
-func createTestHub(storage *MockStorage) *chathub.ManagerService {
-	return &chathub.ManagerService{
-		Clients:        make(map[string]chathub.Client),
-		IncomingCh:     make(chan models.ChatMessage, 10),
-		MatchRequestCh: make(chan models.SearchRequest, 10),
-		RegisterCh:     make(chan chathub.Client, 10),
-		UnregisterCh:   make(chan chathub.Client, 10),
-		Storage:        storage, // Fixed: Use interface type, not concrete *storage.Service
-	}
+func TestAddUserToQueue(t *testing.T) {
+	// Arrange
+	storageMock := new(MockStorage)
+	hub := chathub.NewManagerService(storageMock)
+	matcher := chathub.NewMatcherService(hub, storageMock)
+	storageMock.On("AddUserToSearchQueue", "user_123").Return(nil)
+
+	// Act
+	matcher.AddUserToQueue(models.SearchRequest{UserID: "user_123"})
+
+	// Assert
+	assert.Contains(t, matcher.Queue, "user_123")
+	storageMock.AssertCalled(t, "AddUserToSearchQueue", "user_123")
 }
