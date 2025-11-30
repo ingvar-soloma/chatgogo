@@ -30,6 +30,8 @@ type Storage interface {
 
 	// Message and History operations
 	PublishMessage(roomID string, msg models.ChatMessage) error
+	SaveMessage(msg *models.ChatMessage) error
+	GetChatHistory(roomID string) ([]models.ChatHistory, error)
 	SaveTgMessageID(historyID uint, anonID string, tgMsgID int) error
 	FindPartnerTelegramIDForReply(originalHistoryID uint, currentRecipientAnonID string) (*int, error)
 	FindOriginalHistoryIDByTgID(tgMsgID uint) (*uint, error)
@@ -43,6 +45,7 @@ type Storage interface {
 	AddUserToSearchQueue(userID string) error
 	RemoveUserFromSearchQueue(userID string) error
 	GetSearchingUsers() ([]string, error)
+	SubscribeToAllRooms() *redis.PubSub
 }
 
 // Service provides the implementation of the Storage interface,
@@ -55,7 +58,7 @@ type Service struct {
 
 // NewStorageService creates and returns a new Service instance.
 // It requires a GORM DB client and a Redis client as parameters.
-func NewStorageService(db *gorm.DB, rdb *redis.Client) *Service {
+func NewStorageService(db *gorm.DB, rdb *redis.Client) Storage {
 	return &Service{
 		DB:    db,
 		Redis: rdb,

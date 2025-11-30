@@ -28,15 +28,15 @@ type ManagerService struct {
 	UnregisterCh chan Client
 
 	// Storage provides access to the data persistence layer.
-	Storage *storage.Service
-	// pubSubChannel is a channel for receiving messages from the Redis Pub/Sub subscription.
-	pubSubChannel chan models.ChatMessage
+	Storage storage.Storage
+	// PubSubCh is a channel for receiving messages from the Redis Pub/Sub subscription.
+	PubSubCh chan models.ChatMessage
 	// ClientRestorer is a function used to recreate a client's state during session recovery.
 	ClientRestorer ClientRestorer
 }
 
 // NewManagerService creates and returns a new ManagerService instance.
-func NewManagerService(s *storage.Service) *ManagerService {
+func NewManagerService(s storage.Storage) *ManagerService {
 	return &ManagerService{
 		Clients:        make(map[string]Client),
 		IncomingCh:     make(chan models.ChatMessage, 10),
@@ -44,7 +44,7 @@ func NewManagerService(s *storage.Service) *ManagerService {
 		RegisterCh:     make(chan Client, 10),
 		UnregisterCh:   make(chan Client, 10),
 		Storage:        s,
-		pubSubChannel:  make(chan models.ChatMessage, 10),
+		PubSubCh:       make(chan models.ChatMessage, 10),
 	}
 }
 
@@ -65,7 +65,7 @@ func (m *ManagerService) Run() {
 			m.handleUnregister(client)
 		case message := <-m.IncomingCh:
 			m.handleIncomingMessage(message)
-		case message := <-m.pubSubChannel:
+		case message := <-m.PubSubCh:
 			m.handlePubSubMessage(message)
 		}
 	}

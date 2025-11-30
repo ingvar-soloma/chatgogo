@@ -40,14 +40,14 @@ func (m *MatcherService) Run() {
 	for {
 		select {
 		case req := <-m.Hub.MatchRequestCh:
-			m.addUserToQueue(req)
-			m.findMatch(req)
+			m.AddUserToQueue(req)
+			m.FindMatch(req)
 		default:
 			// If there are no new requests but the queue is not empty,
 			// iterate over the queue to find matches.
 			if len(m.Queue) > 1 {
 				for _, req := range m.Queue {
-					m.findMatch(req)
+					m.FindMatch(req)
 				}
 			}
 			// Pause to prevent high CPU usage when the queue is empty or has one user.
@@ -76,8 +76,8 @@ func (m *MatcherService) restoreSearchQueue() {
 	log.Printf("Restored %d users to search queue.", len(m.Queue))
 }
 
-// addUserToQueue adds a new user to the matchmaking queue.
-func (m *MatcherService) addUserToQueue(req models.SearchRequest) {
+// AddUserToQueue adds a new user to the matchmaking queue.
+func (m *MatcherService) AddUserToQueue(req models.SearchRequest) {
 	m.Queue[req.UserID] = req
 	if err := m.Storage.AddUserToSearchQueue(req.UserID); err != nil {
 		log.Printf("Error adding user to search queue in storage: %v", err)
@@ -85,8 +85,8 @@ func (m *MatcherService) addUserToQueue(req models.SearchRequest) {
 	log.Printf("New match request added to queue: %s", req.UserID)
 }
 
-// findMatch attempts to find a chat partner for the given search request.
-func (m *MatcherService) findMatch(req models.SearchRequest) {
+// FindMatch attempts to find a chat partner for the given search request.
+func (m *MatcherService) FindMatch(req models.SearchRequest) {
 	// Iterate through the queue to find a potential match.
 	for targetID := range m.Queue {
 		if targetID == req.UserID {
