@@ -70,6 +70,13 @@ func (s *BotService) getOrCreateClient(chatID int64) *Client {
 		Storage: s.Storage,
 	}
 
+	// --- FIX: Synchronously restore active room to avoid race condition ---
+	activeRoomID, err := s.Storage.GetActiveRoomIDForUser(anonID)
+	if err == nil && activeRoomID != "" {
+		newClient.SetRoomID(activeRoomID)
+		log.Printf("Client %s restored to room %s synchronously.", anonID, activeRoomID)
+	}
+
 	// 4. Реєструємо клієнта в хабі (хаб зберігає його як chathub.Client)
 	s.Hub.RegisterCh <- newClient
 
@@ -78,6 +85,38 @@ func (s *BotService) getOrCreateClient(chatID int64) *Client {
 
 	// 6. Повертаємо конкретний тип *Client (без затвердження)
 	return newClient
+}
+
+// RestoreActiveSessions відновлює сесії для користувачів, які мають активні кімнати
+func (s *BotService) RestoreActiveSessions() {
+	log.Println("Restoring active Telegram sessions...")
+	roomIDs, err := s.Storage.GetActiveRoomIDs()
+	if err != nil {
+		log.Printf("Failed to get active rooms: %v", err)
+		return
+	}
+
+	for _, roomID := range roomIDs {
+		room, err := s.Storage.GetRoomByID(roomID)
+		if err != nil {
+			continue
+		}
+
+		// Helper to restore user
+		restoreUser := func(userIDStr string) {
+			chatID, err := strconv.ParseInt(userIDStr, 10, 64)
+			if err != nil {
+				log.Printf("Invalid Telegram ID %s: %v", userIDStr, err)
+				return
+			}
+			// Це створить клієнта і зареєструє його в Hub
+			s.getOrCreateClient(chatID)
+		}
+
+		restoreUser(room.User1ID)
+		restoreUser(room.User2ID)
+	}
+	log.Println("Active Telegram sessions restored.")
 }
 
 // handleEditedMessage обробляє відредаговані повідомлення (ОНОВЛЕНО)
@@ -293,6 +332,9 @@ func (s *BotService) extractMediaInfo(msg *tgbotapi.Message) (msgType string, fi
 
 // Run — головний цикл отримання Telegram-оновлень
 func (s *BotService) Run() {
+	// Відновлюємо сесії перед запуском обробки оновлень
+	s.RestoreActiveSessions()
+
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 	updates := s.BotAPI.GetUpdatesChan(u)

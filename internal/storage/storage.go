@@ -28,6 +28,8 @@ type Storage interface {
 	FindHistoryByID(id uint) (*models.ChatHistory, error)
 
 	GetActiveRoomIDForUser(userID string) (string, error)
+	GetActiveRoomIDs() ([]string, error)
+	GetRoomByID(roomID string) (*models.ChatRoom, error)
 }
 
 type Service struct {
