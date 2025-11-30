@@ -9,15 +9,18 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Константи, які були в manager.go або client_pump.go
 const (
-	writeWait      = 10 * time.Second
-	pongWait       = 60 * time.Second
-	pingPeriod     = (pongWait * 9) / 10
+	// Time allowed to write a message to the peer.
+	writeWait = 10 * time.Second
+	// Time allowed to read the next pong message from the peer.
+	pongWait = 60 * time.Second
+	// Send pings to peer with this period. Must be less than pongWait.
+	pingPeriod = (pongWait * 9) / 10
+	// Maximum message size allowed from peer.
 	maxMessageSize = 512
 )
 
-// WebSocketClient реалізує інтерфейс chathub.Client
+// WebSocketClient is an implementation of the Client interface for WebSocket connections.
 type WebSocketClient struct {
 	UserID string
 	RoomID string
@@ -26,31 +29,36 @@ type WebSocketClient struct {
 	Send   chan models.ChatMessage
 }
 
-// --- Реалізація методів інтерфейсу ---
+// GetUserID returns the client's user ID.
+func (c *WebSocketClient) GetUserID() string { return c.UserID }
 
-func (c *WebSocketClient) GetUserID() string                         { return c.UserID }
-func (c *WebSocketClient) GetRoomID() string                         { return c.RoomID }
-func (c *WebSocketClient) SetRoomID(id string)                       { c.RoomID = id }
+// GetRoomID returns the ID of the room the client is in.
+func (c *WebSocketClient) GetRoomID() string { return c.RoomID }
+
+// SetRoomID sets the client's current room ID.
+func (c *WebSocketClient) SetRoomID(id string) { c.RoomID = id }
+
+// GetSendChannel returns the client's outbound message channel.
 func (c *WebSocketClient) GetSendChannel() chan<- models.ChatMessage { return c.Send }
 
-// Run запускає 'pumps' для WebSocket
+// Run starts the read and write pumps for the WebSocket client.
 func (c *WebSocketClient) Run() {
 	go c.writePump()
 	go c.readPump()
 }
 
-// Close закриває Send канал (що зупинить writePump)
+// Close closes the client's send channel, which in turn gracefully
+// shuts down the write pump and the WebSocket connection.
 func (c *WebSocketClient) Close() {
 	close(c.Send)
-	// readPump зупиниться сам, коли Conn.Close() буде викликано в його defer
 }
 
-// --- Логіка 'Pump' (перейменовані ReadPump/WritePump) ---
-
+// readPump pumps messages from the WebSocket connection to the hub.
+// It ensures that the client is unregistered and the connection is closed
+// when the read loop exits.
 func (c *WebSocketClient) readPump() {
-	// Встановлення таймаутів та обробка закриття з'єднання
 	defer func() {
-		c.Hub.UnregisterCh <- c // Надсилаємо команду на Unregister
+		c.Hub.UnregisterCh <- c
 		c.Conn.Close()
 	}()
 
@@ -62,7 +70,6 @@ func (c *WebSocketClient) readPump() {
 	})
 
 	for {
-		// Використовуємо метод ReadMessage від gorilla/websocket
 		_, message, err := c.Conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
@@ -72,23 +79,19 @@ func (c *WebSocketClient) readPump() {
 		}
 
 		var msg models.ChatMessage
-
 		if err := json.Unmarshal(message, &msg); err != nil {
 			log.Printf("Error decoding JSON from client %s: %v", c.UserID, err)
-			continue // Пропускаємо невірне повідомлення
+			continue
 		}
-
 		msg.SenderID = c.UserID
-
-		// Надсилаємо повідомлення у головний канал хаба
 		c.Hub.IncomingCh <- msg
 	}
 }
 
-// writePump (маленька 'w') читає повідомлення з каналу Send і записує їх у WebSocket.
+// writePump pumps messages from the hub to the WebSocket connection.
+// It also sends periodic ping messages to keep the connection alive.
 func (c *WebSocketClient) writePump() {
 	ticker := time.NewTicker(pingPeriod)
-
 	defer func() {
 		ticker.Stop()
 		c.Conn.Close()
@@ -99,7 +102,7 @@ func (c *WebSocketClient) writePump() {
 		case message, ok := <-c.Send:
 			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
-				// Канал закрито хабом, закриваємо з'єднання WS
+				// The hub closed the channel.
 				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
@@ -116,7 +119,7 @@ func (c *WebSocketClient) writePump() {
 			}
 			w.Write(dataToWrite)
 
-			// Перевіряємо, чи є ще повідомлення у каналі (для ефективності)
+			// Batch write any pending messages in the channel for efficiency.
 			n := len(c.Send)
 			for i := 0; i < n; i++ {
 				nextMsg := <-c.Send
@@ -129,7 +132,7 @@ func (c *WebSocketClient) writePump() {
 			}
 
 		case <-ticker.C:
-			// Надсилаємо Ping для підтримки з'єднання активним
+			// Send a ping message to keep the connection alive.
 			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
