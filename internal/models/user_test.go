@@ -14,7 +14,7 @@ import (
 func TestUserBeforeCreate_GeneratesUUID(t *testing.T) {
 	// Arrange
 	user := &models.User{
-		TelegramID:  "123456789",
+		TelegramID:  123456789,
 		Age:         25,
 		Gender:      "female",
 		Interests:   pq.StringArray{"music", "travel", "coding"},
@@ -43,7 +43,7 @@ func TestUserBeforeCreate_PreservesExistingID(t *testing.T) {
 	existingID := uuid.New().String()
 	user := &models.User{
 		ID:          existingID,
-		TelegramID:  "987654321",
+		TelegramID:  987654321,
 		Age:         30,
 		Gender:      "male",
 		Interests:   pq.StringArray{"sports", "movies"},
@@ -62,9 +62,9 @@ func TestUserBeforeCreate_PreservesExistingID(t *testing.T) {
 func TestUserBeforeCreate_MultipleUsers(t *testing.T) {
 	// Arrange
 	users := []*models.User{
-		{TelegramID: "111", Age: 20, Gender: "female"},
-		{TelegramID: "222", Age: 22, Gender: "male"},
-		{TelegramID: "333", Age: 24, Gender: "non-binary"},
+		{TelegramID: 111, Age: 20, Gender: "female"},
+		{TelegramID: 222, Age: 22, Gender: "male"},
+		{TelegramID: 333, Age: 24, Gender: "non-binary"},
 	}
 
 	generatedIDs := make(map[string]bool)
@@ -123,7 +123,7 @@ func TestUserValidation_EdgeCases(t *testing.T) {
 		{
 			name: "Empty Telegram ID",
 			user: models.User{
-				TelegramID:  "",
+				TelegramID:  0,
 				Age:         25,
 				Gender:      "female",
 				RatingScore: 0,
@@ -134,7 +134,7 @@ func TestUserValidation_EdgeCases(t *testing.T) {
 		{
 			name: "Zero Age",
 			user: models.User{
-				TelegramID:  "123",
+				TelegramID:  123,
 				Age:         0,
 				Gender:      "prefer not to say",
 				RatingScore: 0,
@@ -145,7 +145,7 @@ func TestUserValidation_EdgeCases(t *testing.T) {
 		{
 			name: "Negative Rating",
 			user: models.User{
-				TelegramID:  "456",
+				TelegramID:  456,
 				Age:         30,
 				Gender:      "male",
 				RatingScore: -5,
@@ -156,7 +156,7 @@ func TestUserValidation_EdgeCases(t *testing.T) {
 		{
 			name: "Empty Interests Array",
 			user: models.User{
-				TelegramID:  "789",
+				TelegramID:  789,
 				Age:         28,
 				Gender:      "female",
 				Interests:   pq.StringArray{},
@@ -168,7 +168,7 @@ func TestUserValidation_EdgeCases(t *testing.T) {
 		{
 			name: "Nil Interests Array",
 			user: models.User{
-				TelegramID:  "101112",
+				TelegramID:  101112,
 				Age:         35,
 				Gender:      "male",
 				Interests:   nil,
@@ -200,7 +200,7 @@ func TestUserInterestsArray(t *testing.T) {
 	// Arrange
 	interests := pq.StringArray{"reading", "hiking", "photography"}
 	user := &models.User{
-		TelegramID:  "array_test",
+		TelegramID:  123456789,
 		Age:         27,
 		Gender:      "non-binary",
 		Interests:   interests,
@@ -221,7 +221,7 @@ func TestUserInterestsArray(t *testing.T) {
 // BenchmarkUserBeforeCreate measures UUID generation performance.
 func BenchmarkUserBeforeCreate(b *testing.B) {
 	user := &models.User{
-		TelegramID:  "benchmark_user",
+		TelegramID:  123456789,
 		Age:         25,
 		Gender:      "female",
 		RatingScore: 0,

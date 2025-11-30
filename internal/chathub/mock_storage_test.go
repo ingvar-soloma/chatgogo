@@ -126,3 +126,16 @@ func (m *MockStorage) GetUserByID(userID string) (*models.User, error) {
 	}
 	return args.Get(0).(*models.User), args.Error(1)
 }
+
+func (m *MockStorage) UpdateUserLanguage(telegramID int64, languageCode string) error {
+	args := m.Called(telegramID, languageCode)
+	return args.Error(0)
+}
+
+func (m *MockStorage) GetUserByTelegramID(telegramID int64) (*models.User, error) {
+	args := m.Called(telegramID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*models.User), args.Error(1)
+}
