@@ -8,4 +8,5 @@ type ChatRoom struct {
 	User2ID   string
 	IsActive  bool
 	StartedAt time.Time
+	EndedAt   time.Time
 }

@@ -14,6 +14,7 @@ import (
 type Storage interface {
 	SaveUser(user *models.User) error
 	SaveRoom(room *models.ChatRoom) error
+	CloseRoom(roomID string) error
 	SaveComplaint(complaint *models.Complaint) error
 	SaveTgMessageID(historyID uint, anonID string, tgMsgID int) error
 	SaveUserIfNotExists(telegramID string) error
@@ -55,6 +56,16 @@ func (s *Service) SaveUser(user *models.User) error {
 // SaveRoom зберігає кімнату в PostgreSQL
 func (s *Service) SaveRoom(room *models.ChatRoom) error {
 	return s.DB.Save(room).Error
+}
+
+// CloseRoom закриває кімнату, встановлюючи IsActive = false та EndedAt = time.Now()
+func (s *Service) CloseRoom(roomID string) error {
+	return s.DB.Model(&models.ChatRoom{}).
+		Where("room_id = ?", roomID).
+		Updates(map[string]interface{}{
+			"is_active": false,
+			"ended_at":  gorm.Expr("NOW()"),
+		}).Error
 }
 
 // IsUserBanned перевіряє статус бану в Redis

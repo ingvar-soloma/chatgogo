@@ -162,6 +162,11 @@ func (m *ManagerService) Run() {
 
 				// 1. ЛОГІКА ЗАВЕРШЕННЯ ЧАТУ (аналогічно command_stop)
 				if roomID != "" {
+					// Закриваємо кімнату в БД
+					if err := m.Storage.CloseRoom(roomID); err != nil {
+						log.Printf("ERROR: Failed to close room %s during next command: %v", roomID, err)
+					}
+
 					// 1.1. Створюємо системне повідомлення про вихід для партнера
 					partnerMessage := models.ChatMessage{
 						Type:     "system_match_stop_partner",
@@ -304,6 +309,11 @@ func (m *ManagerService) Run() {
 						}
 					}
 					continue
+				}
+
+				// Закриваємо кімнату в БД
+				if err := m.Storage.CloseRoom(roomID); err != nil {
+					log.Printf("ERROR: Failed to close room %s during stop command: %v", roomID, err)
 				}
 
 				// 2. СИСТЕМНІ ПОВІДОМЛЕННЯ (РІЗНІ ДЛЯ ІНІЦІАТОРА ТА ІНШИХ)
