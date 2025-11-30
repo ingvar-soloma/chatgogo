@@ -7,6 +7,7 @@ import (
 	"chatgogo/backend/internal/chathub"
 	"chatgogo/backend/internal/models"
 	"chatgogo/backend/internal/storage"
+	"context"
 	"log"
 	"strconv"
 	"strings"
@@ -97,9 +98,21 @@ func (s *BotService) RestoreActiveSessions() {
 			continue
 		}
 		restoreUser := func(userIDStr string) {
-			chatID, err := strconv.ParseInt(userIDStr, 10, 64)
+			// userIDStr is the internal UUID, not the Telegram ID.
+			// We need to look up the user to get their Telegram ID.
+			user, err := s.Storage.GetUserByID(userIDStr)
 			if err != nil {
-				log.Printf("Invalid Telegram ID %s: %v", userIDStr, err)
+				log.Printf("Failed to find user %s for restoration: %v", userIDStr, err)
+				return
+			}
+			if user.TelegramID == "" {
+				log.Printf("User %s has no Telegram ID, cannot restore session", userIDStr)
+				return
+			}
+
+			chatID, err := strconv.ParseInt(user.TelegramID, 10, 64)
+			if err != nil {
+				log.Printf("Invalid Telegram ID %s for user %s: %v", user.TelegramID, userIDStr, err)
 				return
 			}
 			s.getOrCreateClient(chatID)
@@ -128,7 +141,7 @@ func (s *BotService) handleEditedMessage(msg *tgbotapi.Message) {
 
 	newType, newFileID, newCaption := s.extractMediaInfo(msg)
 	chatMsg := models.ChatMessage{
-		SenderID:         c.GetUserID(),
+		SenderID:          c.GetUserID(),
 		TgMessageIDSender: &editedTGID,
 		RoomID:            c.GetRoomID(),
 		ReplyToMessageID:  originalHistoryID,
@@ -284,6 +297,14 @@ func (s *BotService) Run() {
 		case update.EditedMessage != nil:
 			s.handleEditedMessage(update.EditedMessage)
 		case update.Message != nil:
+			// Intercept spoiler commands
+			if update.Message.IsCommand() {
+				cmd := update.Message.Command()
+				if cmd == "spoiler_on" || cmd == "spoiler_off" {
+					HandleSpoilerCommand(context.Background(), &update, s.Storage, s.BotAPI)
+					continue
+				}
+			}
 			s.handleIncomingMessage(update.Message)
 		}
 	}

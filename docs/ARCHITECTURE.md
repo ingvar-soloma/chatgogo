@@ -110,6 +110,18 @@ ManagerService {
 2. **Buffered Channels**: All channels have buffers (typically 10) to prevent blocking on send operations.
 3. **Client Isolation**: Each `Client` has its own `Send` channel, written to by the hub and read by `writePump`.
 
+## 2.1 User Preferences
+
+The system supports user-specific preferences to customize the chat experience.
+
+### Default Media Spoiler
+Users can toggle a default "spoiler" flag for all media (photos, videos, animations) they send.
+- **Command**: `/spoiler_on` enables the flag.
+- **Command**: `/spoiler_off` disables the flag.
+- **Storage**: Persisted in the `users` table as `default_media_spoiler`.
+- **Behavior**: When enabled, the bot automatically sets `HasSpoiler: true` for any media message sent by the user to their partner.
+
+
 ---
 
 ## 3. Data Flow

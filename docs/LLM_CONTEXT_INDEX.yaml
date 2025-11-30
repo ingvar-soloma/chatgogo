@@ -26,6 +26,7 @@ purpose: "Machine-readable codebase structure for rapid LLM comprehension"
   - `Gender`: string
   - `Interests`: pq.StringArray (PostgreSQL text[] type)
   - `RatingScore`: int
+  - `DefaultMediaSpoiler`: bool (default: true) - whether to hide media by default
 - **Lifecycle Hooks**: `BeforeCreate()` - generates UUID if not set
 - **Used By**: 
   - `BotService` (user registration via `SaveUserIfNotExists()`)
@@ -125,6 +126,8 @@ purpose: "Machine-readable codebase structure for rapid LLM comprehension"
 - Parse commands (`/start`, `/stop`, `/next`, `/settings`, `/report`)
 - Extract media information (file IDs, captions)
 - Restore active sessions on service restart
+- "Handle /spoiler_on and /spoiler_off commands to toggle default media spoiler flag."
+
 
 **Key Methods**:
 - `Run()` - Main update polling loop
