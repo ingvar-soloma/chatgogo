@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	tgbotapi "github.com/OvyFlash/telegram-bot-api"
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 // BotService is responsible for receiving Telegram updates and routing them to the hub.
@@ -98,9 +98,21 @@ func (s *BotService) RestoreActiveSessions() {
 			continue
 		}
 		restoreUser := func(userIDStr string) {
-			chatID, err := strconv.ParseInt(userIDStr, 10, 64)
+			// userIDStr is the internal UUID, not the Telegram ID.
+			// We need to look up the user to get their Telegram ID.
+			user, err := s.Storage.GetUserByID(userIDStr)
 			if err != nil {
-				log.Printf("Invalid Telegram ID %s: %v", userIDStr, err)
+				log.Printf("Failed to find user %s for restoration: %v", userIDStr, err)
+				return
+			}
+			if user.TelegramID == "" {
+				log.Printf("User %s has no Telegram ID, cannot restore session", userIDStr)
+				return
+			}
+
+			chatID, err := strconv.ParseInt(user.TelegramID, 10, 64)
+			if err != nil {
+				log.Printf("Invalid Telegram ID %s for user %s: %v", user.TelegramID, userIDStr, err)
 				return
 			}
 			s.getOrCreateClient(chatID)
