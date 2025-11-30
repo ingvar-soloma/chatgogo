@@ -33,12 +33,29 @@ func NewMatcherService(hub *ManagerService, s storage.Storage) *MatcherService {
 func (m *MatcherService) Run() {
 	log.Println("Matcher Service started.")
 
+	// --- RESTORE SEARCH QUEUE ---
+	users, err := m.Storage.GetSearchingUsers()
+	if err != nil {
+		log.Printf("Error restoring search queue: %v", err)
+	} else {
+		for _, userID := range users {
+			if err := m.Hub.RestoreClientSession(userID); err != nil {
+				log.Printf("Failed to restore session for %s: %v", userID, err)
+				m.Storage.RemoveUserFromSearchQueue(userID)
+				continue
+			}
+			m.Queue[userID] = models.SearchRequest{UserID: userID}
+		}
+		log.Printf("Restored %d users to search queue.", len(m.Queue))
+	}
+
 	// Головний цикл Matcher'а: слухає запити та намагається знайти збіги
 	for {
 		// 1. Очікування нового запиту на пошук
 		select {
 		case req := <-m.Hub.MatchRequestCh:
 			m.Queue[req.UserID] = req // Додаємо новий запит у чергу
+			m.Storage.AddUserToSearchQueue(req.UserID)
 			log.Printf("New match request added to queue: %s", req.UserID)
 
 			// 2. Спроба знайти пару
@@ -114,6 +131,9 @@ func (m *MatcherService) findMatch(req models.SearchRequest) {
 			// 7. Видалення обох користувачів із черги
 			delete(m.Queue, req.UserID)
 			delete(m.Queue, targetID)
+
+			m.Storage.RemoveUserFromSearchQueue(req.UserID)
+			m.Storage.RemoveUserFromSearchQueue(targetID)
 
 			log.Printf("Match found: %s and %s in room %s", req.UserID, targetID, roomID)
 			return

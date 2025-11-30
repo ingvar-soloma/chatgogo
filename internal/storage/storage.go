@@ -31,6 +31,10 @@ type Storage interface {
 	GetActiveRoomIDForUser(userID string) (string, error)
 	GetActiveRoomIDs() ([]string, error)
 	GetRoomByID(roomID string) (*models.ChatRoom, error)
+
+	AddUserToSearchQueue(userID string) error
+	RemoveUserFromSearchQueue(userID string) error
+	GetSearchingUsers() ([]string, error)
 }
 
 type Service struct {
@@ -349,4 +353,19 @@ func (s *Service) SaveUserIfNotExists(telegramID string) error {
 	}
 
 	return nil
+}
+
+// AddUserToSearchQueue додає користувача до черги пошуку в Redis
+func (s *Service) AddUserToSearchQueue(userID string) error {
+	return s.Redis.SAdd(s.Ctx, "search_queue", userID).Err()
+}
+
+// RemoveUserFromSearchQueue видаляє користувача з черги пошуку в Redis
+func (s *Service) RemoveUserFromSearchQueue(userID string) error {
+	return s.Redis.SRem(s.Ctx, "search_queue", userID).Err()
+}
+
+// GetSearchingUsers повертає всіх користувачів, які зараз шукають пару
+func (s *Service) GetSearchingUsers() ([]string, error) {
+	return s.Redis.SMembers(s.Ctx, "search_queue").Result()
 }

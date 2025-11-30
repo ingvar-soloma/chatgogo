@@ -10,6 +10,8 @@ import (
 
 // Client представляє одне активне WebSocket-з'єднання.
 
+type ClientRestorer func(userID string) (Client, error)
+
 // ManagerService (додаємо поле для підписки Redis)
 type ManagerService struct {
 	Clients map[string]Client
@@ -24,7 +26,8 @@ type ManagerService struct {
 	Storage *storage.Service
 	Conn    *websocket.Conn
 
-	pubSubChannel chan models.ChatMessage
+	pubSubChannel  chan models.ChatMessage
+	ClientRestorer ClientRestorer
 }
 
 // NewManagerService (ініціалізація нового каналу)
@@ -38,6 +41,33 @@ func NewManagerService(s *storage.Service) *ManagerService {
 		Storage:        s,
 		pubSubChannel:  make(chan models.ChatMessage), // Ініціалізація
 	}
+}
+
+func (m *ManagerService) SetClientRestorer(restorer ClientRestorer) {
+	m.ClientRestorer = restorer
+}
+
+func (m *ManagerService) RestoreClientSession(userID string) error {
+	if m.ClientRestorer == nil {
+		return nil // No restorer configured
+	}
+
+	// 1. Check if already exists
+	if _, ok := m.Clients[userID]; ok {
+		return nil
+	}
+
+	// 2. Create client using factory
+	client, err := m.ClientRestorer(userID)
+	if err != nil {
+		return err
+	}
+
+	// 3. Register and Run
+	m.Clients[userID] = client
+	client.Run()
+	log.Printf("Restored client session for %s", userID)
+	return nil
 }
 
 // RecoverActiveRooms завантажує активні RoomID з Redis та оновлює стан Hub.
