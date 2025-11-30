@@ -9,12 +9,13 @@ import (
 // User represents a user in the system.
 // It contains identification information, demographic data, and interests.
 type User struct {
-	ID          string         `gorm:"primaryKey" json:"id"` // Anonymous UUID
-	TelegramID  string         `gorm:"uniqueIndex"`          // Can be nil
-	Age         int            // User's age
-	Gender      string         // User's gender
-	Interests   pq.StringArray `gorm:"type:text[]"` // Used for storing tags/interests
-	RatingScore int            // Rating score given by chat partners
+	ID                  string         `gorm:"primaryKey" json:"id"` // Anonymous UUID
+	TelegramID          string         `gorm:"uniqueIndex"`          // Can be nil
+	Age                 int            // User's age
+	Gender              string         // User's gender
+	Interests           pq.StringArray `gorm:"type:text[]"` // Used for storing tags/interests
+	RatingScore         int            // Rating score given by chat partners
+	DefaultMediaSpoiler bool           `gorm:"default:true"` // User preference: if true, media sent by this user will have spoiler flag by default
 }
 
 // BeforeCreate is a GORM hook that is called before a record is created.

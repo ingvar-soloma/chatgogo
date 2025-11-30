@@ -7,11 +7,12 @@ import (
 	"chatgogo/backend/internal/chathub"
 	"chatgogo/backend/internal/models"
 	"chatgogo/backend/internal/storage"
+	"context"
 	"log"
 	"strconv"
 	"strings"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 )
 
 // BotService is responsible for receiving Telegram updates and routing them to the hub.
@@ -128,7 +129,7 @@ func (s *BotService) handleEditedMessage(msg *tgbotapi.Message) {
 
 	newType, newFileID, newCaption := s.extractMediaInfo(msg)
 	chatMsg := models.ChatMessage{
-		SenderID:         c.GetUserID(),
+		SenderID:          c.GetUserID(),
 		TgMessageIDSender: &editedTGID,
 		RoomID:            c.GetRoomID(),
 		ReplyToMessageID:  originalHistoryID,
@@ -284,6 +285,14 @@ func (s *BotService) Run() {
 		case update.EditedMessage != nil:
 			s.handleEditedMessage(update.EditedMessage)
 		case update.Message != nil:
+			// Intercept spoiler commands
+			if update.Message.IsCommand() {
+				cmd := update.Message.Command()
+				if cmd == "spoiler_on" || cmd == "spoiler_off" {
+					HandleSpoilerCommand(context.Background(), &update, s.Storage, s.BotAPI)
+					continue
+				}
+			}
 			s.handleIncomingMessage(update.Message)
 		}
 	}

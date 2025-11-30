@@ -20,6 +20,7 @@ type Storage interface {
 	SaveUser(user *models.User) error
 	SaveUserIfNotExists(telegramID string) (*models.User, error)
 	IsUserBanned(anonID string) (bool, error)
+	UpdateUserMediaSpoiler(userID string, value bool) error
 
 	// Room operations
 	SaveRoom(room *models.ChatRoom) error
@@ -27,6 +28,7 @@ type Storage interface {
 	GetActiveRoomIDForUser(userID string) (string, error)
 	GetActiveRoomIDs() ([]string, error)
 	GetRoomByID(roomID string) (*models.ChatRoom, error)
+	GetUserByID(userID string) (*models.User, error)
 
 	// Message and History operations
 	PublishMessage(roomID string, msg models.ChatMessage) error
@@ -349,4 +351,23 @@ func (s *Service) RemoveUserFromSearchQueue(userID string) error {
 // GetSearchingUsers returns a slice of all user IDs currently in the matchmaking queue.
 func (s *Service) GetSearchingUsers() ([]string, error) {
 	return s.Redis.SMembers(s.Ctx, "search_queue").Result()
+}
+
+// UpdateUserMediaSpoiler updates the user's preference for default media spoiler flag.
+func (s *Service) UpdateUserMediaSpoiler(userID string, value bool) error {
+	return s.DB.Model(&models.User{}).
+		Where("id = ?", userID).
+		Update("default_media_spoiler", value).Error
+}
+
+// GetUserByID retrieves a user by their internal ID.
+func (s *Service) GetUserByID(userID string) (*models.User, error) {
+	var user models.User
+	if err := s.DB.Where("id = ?", userID).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("user not found")
+		}
+		return nil, err
+	}
+	return &user, nil
 }

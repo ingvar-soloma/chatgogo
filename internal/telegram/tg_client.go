@@ -164,14 +164,23 @@ func (c *Client) buildTelegramMessage(chatID int64, message models.ChatMessage) 
 		case "photo":
 			msg := tgbotapi.NewPhoto(chatID, fileID)
 			msg.Caption, msg.ParseMode = caption, parseMode
+			if user, err := c.Storage.GetUserByID(c.UserID); err == nil && user.DefaultMediaSpoiler {
+				msg.HasSpoiler = true
+			}
 			return msg
 		case "video":
 			msg := tgbotapi.NewVideo(chatID, fileID)
 			msg.Caption, msg.ParseMode = caption, parseMode
+			if user, err := c.Storage.GetUserByID(c.UserID); err == nil && user.DefaultMediaSpoiler {
+				msg.HasSpoiler = true
+			}
 			return msg
 		case "animation":
 			msg := tgbotapi.NewAnimation(chatID, fileID)
 			msg.Caption, msg.ParseMode = caption, parseMode
+			if user, err := c.Storage.GetUserByID(c.UserID); err == nil && user.DefaultMediaSpoiler {
+				msg.HasSpoiler = true
+			}
 			return msg
 		}
 	case "sticker":
