@@ -129,7 +129,7 @@ func (m *MatcherService) createRoomForMatch(user1ID, user2ID string) {
 	// Notify both clients that a match has been found.
 	matchMessage := models.ChatMessage{
 		RoomID:   roomID,
-		Content:  "Match found! You can start chatting.",
+		Content:  "system_match_found",
 		Type:     "system_match_found",
 		SenderID: "system",
 	}

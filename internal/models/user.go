@@ -16,6 +16,7 @@ type User struct {
 	Interests           pq.StringArray `gorm:"type:text[]"` // Used for storing tags/interests
 	RatingScore         int            // Rating score given by chat partners
 	DefaultMediaSpoiler bool           `gorm:"default:true"` // User preference: if true, media sent by this user will have spoiler flag by default
+	Language            string         `gorm:"default:'en'"` // User's interface language
 }
 
 // BeforeCreate is a GORM hook that is called before a record is created.

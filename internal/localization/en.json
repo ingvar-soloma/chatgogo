@@ -1,0 +1,16 @@
+{
+  "unsupported_message_type": "⚠️ Unsupported message type.",
+  "not_in_chat": "❌ You are not in a chat. Type /start to find a partner.",
+  "start_searching": "⏳ Searching for a partner...",
+  "partner_found": "✅ Partner found! Say hello.",
+  "partner_disconnected": "⚠️ Your partner has disconnected. Type /start to find a new one.",
+  "chat_ended": "🔚 Chat ended. Type /start to find a new partner.",
+  "connection_restored": "✅ Connection restored.",
+  "language_changed": "Language has been changed to English.",
+  "choose_language": "Please choose your language:",
+  "system_search_start": "⏳ Searching for a partner...",
+  "system_reconnect": "✅ Connection restored.",
+  "system_match_found": "✅ **Match found!** Start chatting.",
+  "system_match_stop_self": "🚪 **Chat ended.** You left the room. Type /start to find a new partner.",
+  "system_match_stop_partner": "🚫 **Chat ended.** Your partner left the chat. Type /start to find a new partner."
+}

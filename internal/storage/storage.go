@@ -19,6 +19,7 @@ type Storage interface {
 	// User operations
 	SaveUser(user *models.User) error
 	SaveUserIfNotExists(telegramID string) (*models.User, error)
+	GetUserByTelegramID(telegramID int64) (*models.User, error)
 	IsUserBanned(anonID string) (bool, error)
 	UpdateUserMediaSpoiler(userID string, value bool) error
 
@@ -48,6 +49,9 @@ type Storage interface {
 	RemoveUserFromSearchQueue(userID string) error
 	GetSearchingUsers() ([]string, error)
 	SubscribeToAllRooms() *redis.PubSub
+
+	// User settings
+	UpdateUserLanguage(telegramID int64, languageCode string) error
 }
 
 // Service provides the implementation of the Storage interface,
@@ -334,6 +338,25 @@ func (s *Service) SaveUserIfNotExists(telegramID string) (*models.User, error) {
 
 	if result.RowsAffected > 0 {
 		log.Printf("INFO: New user %s saved to database (TelegramID: %s).", user.ID, telegramID)
+	}
+	return &user, nil
+}
+
+// UpdateUserLanguage updates the user's language preference.
+func (s *Service) UpdateUserLanguage(telegramID int64, languageCode string) error {
+	return s.DB.Model(&models.User{}).
+		Where("telegram_id = ?", telegramID).
+		Update("language", languageCode).Error
+}
+
+// GetUserByTelegramID retrieves a user by their Telegram ID.
+func (s *Service) GetUserByTelegramID(telegramID int64) (*models.User, error) {
+	var user models.User
+	if err := s.DB.Where("telegram_id = ?", telegramID).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("user not found")
+		}
+		return nil, err
 	}
 	return &user, nil
 }

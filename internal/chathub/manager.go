@@ -119,6 +119,13 @@ func (m *ManagerService) RecoverActiveRooms() {
 }
 
 func (m *ManagerService) handleRegister(client Client) {
+	if _, ok := m.Clients[client.GetUserID()]; ok {
+		// Client is reconnecting
+		client.GetSendChannel() <- models.ChatMessage{
+			Type:    "system_info",
+			Content: "system_reconnect",
+		}
+	}
 	m.Clients[client.GetUserID()] = client
 	log.Printf("Client registered: %s", client.GetUserID())
 }
@@ -132,8 +139,18 @@ func (m *ManagerService) handleUnregister(client Client) {
 }
 
 func (m *ManagerService) handleIncomingMessage(message models.ChatMessage) {
-	if message.Type == "command_start" {
+	switch message.Type {
+	case "command_start":
 		m.MatchRequestCh <- models.SearchRequest{UserID: message.SenderID}
+		if client, ok := m.Clients[message.SenderID]; ok {
+			client.GetSendChannel() <- models.ChatMessage{
+				Type:    "system_info",
+				Content: "system_search_start",
+			}
+		}
+		return
+	case "command_stop", "command_next":
+		m.handleStopCommand(message)
 		return
 	}
 
@@ -144,6 +161,55 @@ func (m *ManagerService) handleIncomingMessage(message models.ChatMessage) {
 
 	if err := m.Storage.PublishMessage(message.RoomID, message); err != nil {
 		log.Printf("ERROR: Failed to publish message: %v", err)
+	}
+}
+
+func (m *ManagerService) handleStopCommand(message models.ChatMessage) {
+	roomID := message.RoomID
+	if roomID == "" {
+		return
+	}
+
+	room, err := m.Storage.GetRoomByID(roomID)
+	if err != nil {
+		log.Printf("ERROR: Room not found for stop command: %v", err)
+		return
+	}
+
+	// Determine partner ID
+	var partnerID string
+	if message.SenderID == room.User1ID {
+		partnerID = room.User2ID
+	} else {
+		partnerID = room.User1ID
+	}
+
+	// Notify partner
+	if partnerClient, ok := m.Clients[partnerID]; ok {
+		partnerClient.GetSendChannel() <- models.ChatMessage{
+			Type:    "system_info",
+			Content: "system_match_stop_partner",
+		}
+		partnerClient.SetRoomID("")
+	}
+
+	// Notify sender
+	if senderClient, ok := m.Clients[message.SenderID]; ok {
+		senderClient.GetSendChannel() <- models.ChatMessage{
+			Type:    "system_info",
+			Content: "system_match_stop_self",
+		}
+		senderClient.SetRoomID("")
+	}
+
+	// Close room in storage
+	if err := m.Storage.CloseRoom(roomID); err != nil {
+		log.Printf("ERROR: Failed to close room %s: %v", roomID, err)
+	}
+
+	// If it was a /next command, re-queue the sender
+	if message.Type == "command_next" {
+		m.MatchRequestCh <- models.SearchRequest{UserID: message.SenderID}
 	}
 }
 

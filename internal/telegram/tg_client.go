@@ -2,11 +2,13 @@ package telegram
 
 import (
 	"chatgogo/backend/internal/chathub"
+	"chatgogo/backend/internal/localization"
 	"chatgogo/backend/internal/models"
 	"chatgogo/backend/internal/storage"
 	"log"
 	"reflect"
 	"strconv"
+	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -16,10 +18,11 @@ type Client struct {
 	UserID  string // Internal UUID
 	AnonID  string // Telegram Chat ID
 	RoomID  string
-	Hub     *chathub.ManagerService
-	Send    chan models.ChatMessage
-	BotAPI  *tgbotapi.BotAPI
-	Storage storage.Storage
+	Hub       *chathub.ManagerService
+	Send      chan models.ChatMessage
+	BotAPI    *tgbotapi.BotAPI
+	Storage   storage.Storage
+	Localizer *localization.Localizer
 }
 
 // GetUserID returns the client's internal user ID.
@@ -33,6 +36,32 @@ func (c *Client) SetRoomID(id string) { c.RoomID = id }
 
 // GetSendChannel returns the client's outbound message channel.
 func (c *Client) GetSendChannel() chan<- models.ChatMessage { return c.Send }
+
+// applyDefaultSpoiler checks if the user has default spoilers enabled and applies it to the message.
+func (c *Client) applyDefaultSpoiler(msg tgbotapi.Chattable) tgbotapi.Chattable {
+	user, err := c.Storage.GetUserByID(c.UserID)
+	if err != nil || user == nil || !user.DefaultMediaSpoiler {
+		return msg
+	}
+
+	v := reflect.ValueOf(msg)
+	if v.Kind() == reflect.Struct {
+		ptr := reflect.New(v.Type())
+		ptr.Elem().Set(v)
+		v = ptr
+	}
+
+	if v.Kind() == reflect.Ptr {
+		elem := v.Elem()
+		field := elem.FieldByName("HasSpoiler")
+		if field.IsValid() && field.CanSet() && field.Kind() == reflect.Bool {
+			field.SetBool(true)
+			return v.Interface().(tgbotapi.Chattable)
+		}
+	}
+
+	return msg
+}
 
 // Run starts the client's write pump.
 func (c *Client) Run() { go c.writePump() }
@@ -114,8 +143,22 @@ func (c *Client) writePump() {
 
 // buildTelegramMessage constructs a `tgbotapi.Chattable` from a `models.ChatMessage`.
 func (c *Client) buildTelegramMessage(chatID int64, message models.ChatMessage) tgbotapi.Chattable {
+	user, err := c.Storage.GetUserByID(c.UserID)
+	if err != nil {
+		log.Printf("Error getting user by id: %v", err)
+		// Fallback to English if user not found
+		user = &models.User{Language: "en"}
+	}
+
 	const parseMode = tgbotapi.ModeMarkdown
-	content := escapeMarkdownV2(message.Content)
+	var content string
+
+	// Translate content if it's a system message key
+	if strings.HasPrefix(message.Type, "system_") {
+		content = c.Localizer.GetString(user.Language, message.Content)
+	} else {
+		content = escapeMarkdownV2(message.Content)
+	}
 
 	if message.Type == "edit" {
 		if message.TgMessageIDSender == nil {
@@ -164,24 +207,15 @@ func (c *Client) buildTelegramMessage(chatID int64, message models.ChatMessage) 
 		case "photo":
 			msg := tgbotapi.NewPhoto(chatID, fileID)
 			msg.Caption, msg.ParseMode = caption, parseMode
-			if user, err := c.Storage.GetUserByID(c.UserID); err == nil && user.DefaultMediaSpoiler {
-				msg.HasSpoiler = true
-			}
-			return msg
+			return c.applyDefaultSpoiler(msg)
 		case "video":
 			msg := tgbotapi.NewVideo(chatID, fileID)
 			msg.Caption, msg.ParseMode = caption, parseMode
-			if user, err := c.Storage.GetUserByID(c.UserID); err == nil && user.DefaultMediaSpoiler {
-				msg.HasSpoiler = true
-			}
-			return msg
+			return c.applyDefaultSpoiler(msg)
 		case "animation":
 			msg := tgbotapi.NewAnimation(chatID, fileID)
 			msg.Caption, msg.ParseMode = caption, parseMode
-			if user, err := c.Storage.GetUserByID(c.UserID); err == nil && user.DefaultMediaSpoiler {
-				msg.HasSpoiler = true
-			}
-			return msg
+			return c.applyDefaultSpoiler(msg)
 		}
 	case "sticker":
 		return tgbotapi.NewSticker(chatID, tgbotapi.FileID(message.Content))
@@ -195,17 +229,17 @@ func (c *Client) buildTelegramMessage(chatID int64, message models.ChatMessage) 
 		return msg
 	case "system_match_found":
 		c.RoomID = message.RoomID
-		msg := tgbotapi.NewMessage(chatID, "✅ **Match found!** Start chatting.")
+		msg := tgbotapi.NewMessage(chatID, content)
 		msg.ParseMode = parseMode
 		return msg
 	case "system_match_stop_self":
 		c.RoomID = ""
-		msg := tgbotapi.NewMessage(chatID, "🚪 **Chat ended.** You left the room. Type /start to find a new partner.")
+		msg := tgbotapi.NewMessage(chatID, content)
 		msg.ParseMode = parseMode
 		return msg
 	case "system_match_stop_partner":
 		c.RoomID = ""
-		msg := tgbotapi.NewMessage(chatID, "🚫 **Chat ended.** Your partner left the chat. Type /start to find a new partner.")
+		msg := tgbotapi.NewMessage(chatID, content)
 		msg.ParseMode = parseMode
 		return msg
 	default:

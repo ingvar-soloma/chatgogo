@@ -39,7 +39,7 @@ func TestHandleSpoilerCommand_On(t *testing.T) {
 				{Type: "bot_command", Offset: 0, Length: 11},
 			},
 			From: &tgbotapi.User{ID: 12345},
-			Chat: &tgbotapi.Chat{ID: 12345},
+			Chat: tgbotapi.Chat{ID: 12345},
 		},
 	}
 

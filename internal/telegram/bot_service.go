@@ -5,9 +5,11 @@ package telegram
 
 import (
 	"chatgogo/backend/internal/chathub"
+	"chatgogo/backend/internal/localization"
 	"chatgogo/backend/internal/models"
 	"chatgogo/backend/internal/storage"
 	"context"
+	"fmt"
 	"log"
 	"strconv"
 	"strings"
@@ -17,9 +19,10 @@ import (
 
 // BotService is responsible for receiving Telegram updates and routing them to the hub.
 type BotService struct {
-	BotAPI  *tgbotapi.BotAPI
-	Hub     *chathub.ManagerService
-	Storage storage.Storage
+	BotAPI    *tgbotapi.BotAPI
+	Hub       *chathub.ManagerService
+	Storage   storage.Storage
+	Localizer *localization.Localizer
 }
 
 // NewBotService creates a new BotService instance.
@@ -31,7 +34,12 @@ func NewBotService(token string, hub *chathub.ManagerService, s storage.Storage)
 	bot.Debug = false
 	log.Printf("✅ Authorized on account %s", bot.Self.UserName)
 
-	return &BotService{BotAPI: bot, Hub: hub, Storage: s}, nil
+	localizer, err := localization.NewLocalizer("internal/localization")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create localizer: %w", err)
+	}
+
+	return &BotService{BotAPI: bot, Hub: hub, Storage: s, Localizer: localizer}, nil
 }
 
 // extractMessageContent uniformly extracts text or a caption from a message.
@@ -64,12 +72,13 @@ func (s *BotService) getOrCreateClient(chatID int64) *Client {
 	}
 
 	newClient := &Client{
-		UserID:  userID,
-		AnonID:  anonID,
-		Hub:     s.Hub,
-		Send:    make(chan models.ChatMessage, 10),
-		BotAPI:  s.BotAPI,
-		Storage: s.Storage,
+		UserID:    userID,
+		AnonID:    anonID,
+		Hub:       s.Hub,
+		Send:      make(chan models.ChatMessage, 10),
+		BotAPI:    s.BotAPI,
+		Storage:   s.Storage,
+		Localizer: s.Localizer,
 	}
 
 	activeRoomID, err := s.Storage.GetActiveRoomIDForUser(userID)
@@ -213,17 +222,26 @@ func (s *BotService) handleIncomingMessage(msg *tgbotapi.Message) {
 		chatMsg.Type = "video_note"
 		chatMsg.Content = msg.VideoNote.FileID
 	default:
-		c.GetSendChannel() <- models.ChatMessage{
-			Type:    "system_info",
-			Content: "⚠️ This message type is not supported.",
+		user, err := s.Storage.GetUserByTelegramID(msg.Chat.ID)
+		if err != nil {
+			log.Printf("Error getting user by telegram id: %v", err)
+			return
 		}
+
+		unsupportedMsg := tgbotapi.NewMessage(msg.Chat.ID, s.Localizer.GetString(user.Language, "unsupported_message_type"))
+		s.BotAPI.Send(unsupportedMsg)
 		return
 	}
 
 	if chatMsg.RoomID == "" && !strings.HasPrefix(chatMsg.Type, "command_") {
+		user, err := s.Storage.GetUserByTelegramID(msg.Chat.ID)
+		if err != nil {
+			log.Printf("Error getting user by telegram id: %v", err)
+			return
+		}
 		c.GetSendChannel() <- models.ChatMessage{
 			Type:    "system_info",
-			Content: "❌ You are not in a chat. Type /start to find a partner.",
+			Content: s.Localizer.GetString(user.Language, "not_in_chat"),
 		}
 		return
 	}
@@ -255,6 +273,25 @@ func (s *BotService) handleTextMessage(chatMsg *models.ChatMessage) {
 	default:
 		chatMsg.Type = "unknown_command"
 	}
+}
+
+// handleLanguageCommand sends a message with a keyboard to choose a language.
+func (s *BotService) handleLanguageCommand(chatID int64) {
+	user, err := s.Storage.GetUserByTelegramID(chatID)
+	if err != nil {
+		log.Printf("Error getting user by telegram id: %v", err)
+		return
+	}
+
+	msg := tgbotapi.NewMessage(chatID, s.Localizer.GetString(user.Language, "choose_language"))
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("English", "set_lang_en"),
+			tgbotapi.NewInlineKeyboardButtonData("Русский", "set_lang_ru"),
+			tgbotapi.NewInlineKeyboardButtonData("Українська", "set_lang_ua"),
+		),
+	)
+	s.BotAPI.Send(msg)
 }
 
 // extractMediaInfo uniformly extracts media type, file ID, and caption from a message.
@@ -297,15 +334,48 @@ func (s *BotService) Run() {
 		case update.EditedMessage != nil:
 			s.handleEditedMessage(update.EditedMessage)
 		case update.Message != nil:
-			// Intercept spoiler commands
 			if update.Message.IsCommand() {
-				cmd := update.Message.Command()
-				if cmd == "spoiler_on" || cmd == "spoiler_off" {
+				switch update.Message.Command() {
+				case "language":
+					s.handleLanguageCommand(update.Message.Chat.ID)
+					continue
+				case "spoiler_on", "spoiler_off":
 					HandleSpoilerCommand(context.Background(), &update, s.Storage, s.BotAPI)
 					continue
 				}
 			}
 			s.handleIncomingMessage(update.Message)
+		case update.CallbackQuery != nil:
+			s.handleCallbackQuery(update.CallbackQuery)
 		}
 	}
+}
+
+func (s *BotService) handleCallbackQuery(callbackQuery *tgbotapi.CallbackQuery) {
+	// Respond to the callback query to remove the "loading" state
+	callback := tgbotapi.NewCallback(callbackQuery.ID, "")
+	if _, err := s.BotAPI.Request(callback); err != nil {
+		log.Printf("failed to send callback response: %v", err)
+	}
+
+	// Extract language code from data
+	langCode := strings.TrimPrefix(callbackQuery.Data, "set_lang_")
+	chatID := callbackQuery.Message.Chat.ID
+
+	// Update user's language in the database
+	err := s.Storage.UpdateUserLanguage(chatID, langCode)
+	if err != nil {
+		log.Printf("failed to update user language: %v", err)
+		return
+	}
+
+	// Send a confirmation message
+	user, err := s.Storage.GetUserByTelegramID(chatID)
+	if err != nil {
+		log.Printf("Error getting user by telegram id: %v", err)
+		return
+	}
+
+	msg := tgbotapi.NewMessage(chatID, s.Localizer.GetString(user.Language, "language_changed"))
+	s.BotAPI.Send(msg)
 }
