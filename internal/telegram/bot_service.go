@@ -50,19 +50,28 @@ func extractMessageContent(msg *tgbotapi.Message) string {
 func (s *BotService) getOrCreateClient(chatID int64) *Client {
 	anonID := strconv.FormatInt(chatID, 10)
 
-	// 1. Перевіряємо, чи клієнт вже існує в хабі
-	if existingClient, ok := s.Hub.Clients[anonID]; ok {
+	// 1. Resolve UserID from DB (TelegramID -> UserID)
+	user, err := s.Storage.SaveUserIfNotExists(anonID)
+	if err != nil {
+		log.Printf("FATAL: Failed to get/create user for TelegramID %s: %v", anonID, err)
+		return nil
+	}
+	userID := user.ID
 
-		// 2. Виконуємо БЕЗПЕЧНЕ затвердження типу
+	// 2. Перевіряємо, чи клієнт вже існує в хабі (by UserID)
+	if existingClient, ok := s.Hub.Clients[userID]; ok {
+
+		// 3. Виконуємо БЕЗПЕЧНЕ затвердження типу
 		if client, ok := existingClient.(*Client); ok {
 			return client
 		}
 		// Це не повинно статися, але це захист
-		log.Printf("ERROR: Client %s is not of type *telegram.Client", anonID)
+		log.Printf("ERROR: Client %s (User: %s) is not of type *telegram.Client", anonID, userID)
 	}
 
-	// 3. Клієнт не існує, створюємо нового
+	// 4. Клієнт не існує, створюємо нового
 	newClient := &Client{
+		UserID:  userID,
 		AnonID:  anonID,
 		Hub:     s.Hub,
 		Send:    make(chan models.ChatMessage, 10),
@@ -71,19 +80,23 @@ func (s *BotService) getOrCreateClient(chatID int64) *Client {
 	}
 
 	// --- FIX: Synchronously restore active room to avoid race condition ---
-	activeRoomID, err := s.Storage.GetActiveRoomIDForUser(anonID)
+	// Note: GetActiveRoomIDForUser now expects UserID (UUID)
+	activeRoomID, err := s.Storage.GetActiveRoomIDForUser(userID)
 	if err == nil && activeRoomID != "" {
 		newClient.SetRoomID(activeRoomID)
-		log.Printf("Client %s restored to room %s synchronously.", anonID, activeRoomID)
+		log.Printf("Client %s (User: %s) restored to room %s synchronously.", anonID, userID, activeRoomID)
 	}
 
-	// 4. Реєструємо клієнта в хабі (хаб зберігає його як chathub.Client)
+	// 5. Реєструємо клієнта в хабі (хаб зберігає його як chathub.Client, key = UserID)
+	// We need to ensure Hub registers with UserID key.
+	// Hub.RegisterCh receives Client interface. ManagerService uses client.GetUserID() as key.
+	// So we just send the client.
 	s.Hub.RegisterCh <- newClient
 
-	// 5. Запускаємо goroutine (метод Run() належить типу *Client)
+	// 6. Запускаємо goroutine (метод Run() належить типу *Client)
 	go newClient.Run()
 
-	// 6. Повертаємо конкретний тип *Client (без затвердження)
+	// 7. Повертаємо конкретний тип *Client (без затвердження)
 	return newClient
 }
 
@@ -121,7 +134,7 @@ func (s *BotService) RestoreActiveSessions() {
 
 // handleEditedMessage обробляє відредаговані повідомлення (ОНОВЛЕНО)
 func (s *BotService) handleEditedMessage(msg *tgbotapi.Message) {
-	anonID := strconv.FormatInt(msg.Chat.ID, 10)
+	// anonID := strconv.FormatInt(msg.Chat.ID, 10) // Unused now
 	c := s.getOrCreateClient(msg.Chat.ID)
 
 	// 1. Знаходимо оригінальний ID історії
@@ -143,7 +156,7 @@ func (s *BotService) handleEditedMessage(msg *tgbotapi.Message) {
 	newType, newFileID, newCaption := s.extractMediaInfo(msg)
 
 	chatMsg := models.ChatMessage{
-		SenderID: anonID,
+		SenderID: c.GetUserID(), // Use internal UserID
 		// TgMessageIDSender міститиме TG ID повідомлення, яке потрібно відредагувати/відповісти партнеру (покладаємося на Hub)
 		// Нам потрібно лише передати TgMessageIDSender відправника (для оновлення БД)
 		TgMessageIDSender: &editedTGID,
@@ -187,20 +200,18 @@ func (s *BotService) handleEditedMessage(msg *tgbotapi.Message) {
 
 // handleIncomingMessage обробляє нові повідомлення користувачів
 func (s *BotService) handleIncomingMessage(msg *tgbotapi.Message) {
-	telegramID := strconv.FormatInt(msg.Chat.ID, 10)
+	// telegramID := strconv.FormatInt(msg.Chat.ID, 10) // Redundant now
 
-	if err := s.Storage.SaveUserIfNotExists(telegramID); err != nil {
-		log.Printf("FATAL: Failed to ensure user %s exists in DB: %v", telegramID, err)
-		// Обробка помилки (наприклад, відповісти користувачу про тимчасові проблеми)
-		return
-	}
-
+	// getOrCreateClient handles user creation/retrieval
 	c := s.getOrCreateClient(msg.Chat.ID)
+	if c == nil {
+		return // Error logged in getOrCreateClient
+	}
 
 	tempID := uint(msg.MessageID)
 	chatMsg := models.ChatMessage{
 		TgMessageIDSender: &tempID,
-		SenderID:          telegramID,
+		SenderID:          c.GetUserID(), // Use internal UserID
 		RoomID:            c.GetRoomID(),
 	}
 

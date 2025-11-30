@@ -12,7 +12,8 @@ import (
 )
 
 type Client struct {
-	AnonID  string
+	UserID  string // Internal UUID
+	AnonID  string // Telegram Chat ID
 	RoomID  string
 	Hub     *chathub.ManagerService
 	Send    chan models.ChatMessage
@@ -20,7 +21,7 @@ type Client struct {
 	Storage storage.Storage
 }
 
-func (c *Client) GetAnonID() string                         { return c.AnonID }
+func (c *Client) GetUserID() string                         { return c.UserID }
 func (c *Client) GetRoomID() string                         { return c.RoomID }
 func (c *Client) SetRoomID(id string)                       { c.RoomID = id }
 func (c *Client) GetSendChannel() chan<- models.ChatMessage { return c.Send }
@@ -36,7 +37,7 @@ func (c *Client) setReplyID(tgMsg tgbotapi.Chattable, originalHistoryID uint) tg
 		return tgMsg
 	}
 
-	replyTgIDUint, err := c.Storage.FindPartnerTelegramIDForReply(originalHistoryID, c.AnonID)
+	replyTgIDUint, err := c.Storage.FindPartnerTelegramIDForReply(originalHistoryID, c.UserID)
 	if err != nil || replyTgIDUint == nil {
 		return tgMsg
 	}
@@ -70,10 +71,10 @@ func escapeMarkdownV2(text string) string {
 
 // --- Основна логіка ---
 func (c *Client) writePump() {
-	defer log.Printf("Зупинка writePump для Telegram клієнта %s", c.AnonID)
+	defer log.Printf("Зупинка writePump для Telegram клієнта %s (User: %s)", c.AnonID, c.UserID)
 
 	for message := range c.Send {
-		if message.SenderID == c.AnonID && message.Type != "system_info" {
+		if message.SenderID == c.UserID && message.Type != "system_info" {
 			continue
 		}
 
@@ -101,7 +102,7 @@ func (c *Client) writePump() {
 
 		// Збереження MessageID
 		if message.ID != 0 && c.Storage != nil {
-			if err := c.Storage.SaveTgMessageID(uint(message.ID), c.AnonID, sentMsg.MessageID); err != nil {
+			if err := c.Storage.SaveTgMessageID(uint(message.ID), c.UserID, sentMsg.MessageID); err != nil {
 				log.Printf("ERROR: Failed to save Telegram Message ID %d for history %d: %v", sentMsg.MessageID, message.ID, err)
 			}
 		}

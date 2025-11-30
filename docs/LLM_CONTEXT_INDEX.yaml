@@ -1,0 +1,696 @@
+# LLM Context Index for ChatGoGo Backend
+
+## Metadata
+version: "1.0.0"
+project_name: "ChatGoGo Anonymous Chat Backend"
+language: "Go 1.25.3"
+last_updated: "2025-11-30"
+purpose: "Machine-readable codebase structure for rapid LLM comprehension"
+
+---
+
+## Core Entities Mapping
+
+### Database Entities
+
+#### User
+- **Struct**: `models.User` (`internal/models/user.go`)
+- **Persistent Layer**: PostgreSQL table `users`
+- **Primary Key**: `ID` (UUID string, auto-generated via GORM `BeforeCreate` hook)
+- **Unique Constraints**: `TelegramID` (unique index)
+- **Managing Service**: `storage.Service`
+- **Fields**:
+  - `ID`: string (UUID)
+  - `TelegramID`: string (nullable, from Telegram Chat ID)
+  - `Age`: int
+  - `Gender`: string
+  - `Interests`: pq.StringArray (PostgreSQL text[] type)
+  - `RatingScore`: int
+- **Lifecycle Hooks**: `BeforeCreate()` - generates UUID if not set
+- **Used By**: 
+  - `BotService` (user registration via `SaveUserIfNotExists()`)
+  - `MatcherService` (future: gender/age filtering)
+
+#### ChatRoom
+- **Struct**: `models.ChatRoom` (`internal/models/room.go` - inferred)
+- **Persistent Layer**: PostgreSQL table `chat_rooms`
+- **Primary Key**: `RoomID` (UUID string)
+- **Managing Service**: `storage.Service`, `MatcherService`
+- **Fields** (inferred from usage):
+  - `RoomID`: string (UUID)
+  - `User1ID`: string (references User.ID)
+  - `User2ID`: string (references User.ID)
+  - `IsActive`: bool
+  - `StartedAt`: timestamp
+  - `EndedAt`: *timestamp (nullable, added via migration)
+- **State Transitions**:
+  - Created: `MatcherService.findMatch()` → `Storage.SaveRoom()`
+  - Closed: `/stop` or `/next` command → `Storage.CloseRoom()`
+- **Indexing**: Active rooms are cached in Redis for fast retrieval
+
+#### ChatHistory
+- **Struct**: `models.ChatHistory` (`internal/models/history.go` - inferred)
+- **Persistent Layer**: PostgreSQL table `chat_histories`
+- **Primary Key**: `ID` (auto-increment uint)
+- **Managing Service**: `storage.Service`
+- **Fields**:
+  - `ID`: uint (GORM Model)
+  - `RoomID`: string (FK to ChatRoom)
+  - `SenderID`: string (FK to User)
+  - `Content`: string (message text or file_id)
+  - `Type`: string (text|photo|video|sticker|voice|animation|video_note)
+  - `Metadata`: string (caption for media, JSON for structured data)
+  - `ReplyToMessageID`: *uint (nullable, references ChatHistory.ID)
+  - `TgMessageIDSender`: *uint (nullable, Telegram message ID for sender)
+  - `TgMessageIDReceiver`: *uint (nullable, Telegram message ID for receiver)
+  - `CreatedAt`: timestamp
+- **Special Queries**:
+  - `FindOriginalHistoryIDByTgID()` - for reply handling
+  - `FindOriginalHistoryIDByTgIDMedia()` - for media edit handling (uses DISTINCT ON)
+
+#### Complaint
+- **Struct**: `models.Complaint` (`internal/models/complaint.go` - inferred)
+- **Persistent Layer**: PostgreSQL table `complaints`
+- **Managing Service**: `storage.Service`
+- **Fields** (inferred):
+  - `ID`: uint
+  - `RoomID`: string
+  - `ReporterID`: string
+  - `Reason`: string
+  - `Status`: string (new|pending|resolved)
+- **Triggered By**: `/report` command
+
+#### ChatMessage (Internal Transport)
+- **Struct**: `models.ChatMessage` (in-memory only, not directly persisted)
+- **Purpose**: Internal message format for hub communication
+- **Fields**:
+  - `ID`: uint (populated after `SaveMessage()`)
+  - `RoomID`: string
+  - `SenderID`: string
+  - `Content`: string
+  - `Type`: string (text|photo|command_start|system_match_found|...)
+  - `Metadata`: string
+  - `TgMessageIDSender`: *uint
+  - `ReplyToMessageID`: *uint
+- **Lifecycle**:
+  1. Created by `BotService.handleIncomingMessage()`
+  2. Sent to `ManagerService.IncomingCh`
+  3. Saved to DB via `Storage.SaveMessage()` (converted to ChatHistory)
+  4. Published to Redis via `Storage.PublishMessage()`
+  5. Delivered to partner via `Client.Send` channel
+
+#### SearchRequest
+- **Struct**: `models.SearchRequest` (in-memory only)
+- **Purpose**: Matchmaking queue entry
+- **Fields**:
+  - `UserID`: string
+  - (Future: Gender, Age, Interests filters)
+- **Lifecycle**:
+  1. Created by `ManagerService` on `/start` command
+  2. Sent to `MatcherService.MatchRequestCh`
+  3. Stored in `MatcherService.Queue` map
+  4. Removed after successful match or timeout
+
+---
+
+## Service Responsibilities
+
+### BotService (`internal/telegram/bot_service.go`)
+**Role**: Telegram Bot API integration layer  
+**Responsibilities**:
+- Receive Telegram updates (messages, edits, commands)
+- Translate Telegram types to internal `ChatMessage` structs
+- Manage Telegram `Client` lifecycle (creation, registration, restoration)
+- Handle message edits (track changes, update history)
+- Parse commands (`/start`, `/stop`, `/next`, `/settings`, `/report`)
+- Extract media information (file IDs, captions)
+- Restore active sessions on service restart
+
+**Key Methods**:
+- `Run()` - Main update polling loop
+- `handleIncomingMessage()` - New message processor
+- `handleEditedMessage()` - Edit handler
+- `handleTextMessage()` - Command parser
+- `getOrCreateClient()` - Client factory with room restoration
+- `RestoreActiveSessions()` - Startup recovery
+
+**Dependencies**:
+- `*tgbotapi.BotAPI` - Telegram Bot API client
+- `*chathub.ManagerService` - Message routing hub
+- `storage.Storage` - Data persistence
+
+**Channels Produced To**:
+- `Hub.IncomingCh` ← ChatMessage
+- `Hub.RegisterCh` ← Client
+
+### ManagerService (`internal/chathub/manager.go` + `pubsub.go`)
+**Role**: Central message router and client manager  
+**Responsibilities**:
+- Maintain active `Clients` map (AnonID → Client)
+- Route incoming messages to appropriate handlers
+- Coordinate matchmaking via `MatcherService`
+- Publish messages to Redis Pub/Sub for horizontal scaling
+- Subscribe to Redis Pub/Sub and distribute to local clients
+- Handle client registration/unregistration
+- Close rooms and notify partners
+- Recover active rooms from DB on startup
+
+**Key Methods**:
+- `Run()` - Main event loop (select on 4 channels)
+- `StartPubSubListener()` - Redis Pub/Sub goroutine
+- `RecoverActiveRooms()` - Startup recovery
+
+**Channel Handlers**:
+- `RegisterCh` → Add client to map, restore room if exists
+- `UnregisterCh` → Remove client, close room if needed
+- `MatchRequestCh` → (Delegated to MatcherService, but processed here for system messages)
+- `IncomingCh` → Route based on message type:
+  - `command_start|search` → Create SearchRequest, send to MatchRequestCh
+  - `command_stop` → Close room, notify partner
+  - `command_next` → Close room + initiate new search
+  - `text|photo|video|...` → SaveMessage + PublishMessage
+  - `command_report` → SaveComplaint
+
+**Dependencies**:
+- `storage.Storage` - Persistence
+- `*redis.Client` - Pub/Sub via Storage
+
+**Channels Consumed**:
+- `IncomingCh` (from BotService, WSClient)
+- `MatchRequestCh` (from self, after creating SearchRequest)
+- `RegisterCh` (from BotService)
+- `UnregisterCh` (from BotService)
+
+**Channels Produced To**:
+- `MatchRequestCh` ← SearchRequest (self-send)
+- `Client.Send` ← ChatMessage (to individual clients)
+
+### MatcherService (`internal/chathub/matcher.go`)
+**Role**: Matchmaking queue and pairing logic  
+**Responsibilities**:
+- Maintain queue of users seeking partners
+- Find compatible pairs based on criteria (future: gender, age, interests)
+- Create chat rooms for matched pairs
+- Assign room IDs to both clients
+- Send match notifications
+- Remove matched users from queue
+
+**Key Methods**:
+- `Run()` - Main loop consuming MatchRequestCh
+- `findMatch()` - Pairing algorithm (currently: first-come-first-served)
+
+**Data Structures**:
+- `Queue`: `map[string]models.SearchRequest` (UserID → Request)
+
+**Algorithm** (simplified):
+```
+for each user in Queue:
+    if user != requesting_user:
+        # Match found
+        roomID = UUID.New()
+        SaveRoom(roomID, user1, user2)
+        SetRoomID(user1, roomID)
+        SetRoomID(user2, roomID)
+        Send(user1, "system_match_found")
+        Send(user2, "system_match_found")
+        delete(Queue, user1)
+        delete(Queue, user2)
+        return
+```
+
+**Future Enhancements**:
+- Gender/age filtering
+- Interest-based scoring
+- Queue timeout (remove stale requests)
+- Priority matching (premium users)
+
+**Dependencies**:
+- `*ManagerService.Hub` - Access to Clients map
+- `storage.Storage` - SaveRoom()
+
+**Channels Consumed**:
+- `Hub.MatchRequestCh` ← SearchRequest
+
+### Storage Service (`internal/storage/storage.go`)
+**Role**: Data access layer abstraction  
+**Responsibilities**:
+- PostgreSQL operations via GORM
+- Redis operations via go-redis/v9
+- Message persistence and retrieval
+- Room lifecycle management
+- User management
+- Complaint handling
+- Telegram message ID tracking (for reply/edit features)
+- Search queue management (Redis sets)
+
+**Interface Methods** (18 total):
+- **User**: SaveUser, SaveUserIfNotExists, IsUserBanned
+- **Room**: SaveRoom, CloseRoom, GetActiveRoomIDs, GetActiveRoomIDForUser, GetRoomByID
+- **Message**: PublishMessage, SaveTgMessageID
+- **History**: FindPartnerTelegramIDForReply, FindOriginalHistoryIDByTgID, FindOriginalHistoryIDByTgIDMedia, FindHistoryByID
+- **Complaint**: SaveComplaint
+- **Queue**: AddUserToSearchQueue, RemoveUserFromSearchQueue, GetSearchingUsers
+
+**Implementation**:
+- **Service struct**: Holds `*gorm.DB`, `*redis.Client`, `context.Context`
+- **SaveMessage()**: Converts ChatMessage → ChatHistory, persists, updates msg.ID
+- **PublishMessage()**: JSON marshals ChatMessage, publishes to Redis channel `roomID`
+- **CloseRoom()**: Sets `is_active = false`, `ended_at = NOW()`
+- **Complex Queries**:
+  - `FindOriginalHistoryIDByTgIDMedia()`: Uses PostgreSQL `DISTINCT ON` for media edit tracking
+
+**Dependencies**:
+- `gorm.io/gorm` - ORM
+- `github.com/redis/go-redis/v9` - Redis client
+
+### Client Interface (`internal/chathub/client.go`)
+**Role**: Abstraction over connection types  
+**Purpose**: Allow both Telegram and WebSocket clients to be managed uniformly
+
+**Interface Definition**:
+```go
+type Client interface {
+    GetAnonID() string
+    GetRoomID() string
+    SetRoomID(string)
+    GetSendChannel() chan<- models.ChatMessage
+    Run()   // Start message pumps
+    Close() // Cleanup
+}
+```
+
+**Implementations**:
+1. **telegram.Client** (`internal/telegram/tg_client.go`):
+   - Fields: AnonID, RoomID, Hub, Send, BotAPI, Storage
+   - `Run()` → starts `writePump()` goroutine
+   - `writePump()` → reads from `Send` channel, sends via Telegram Bot API
+   - `buildTelegramMessage()` → converts ChatMessage to tgbotapi.Chattable
+
+2. **chathub.WSClient** (`internal/chathub/ws_client.go`):
+   - Fields: AnonID, RoomID, Hub, Send, Conn (*websocket.Conn)
+   - `Run()` → starts `readPump()` and `writePump()` goroutines
+   - `readPump()` → reads from WebSocket, sends to Hub.IncomingCh
+   - `writePump()` → reads from `Send` channel, writes to WebSocket
+
+**Lifecycle**:
+1. Created by `BotService.getOrCreateClient()` or WebSocket handler
+2. Registered via `Hub.RegisterCh`
+3. Room assigned by `MatcherService.findMatch()` or restored from DB
+4. Receives messages via `Send` channel (written by Hub)
+5. Unregistered via `Hub.UnregisterCh` on disconnect
+
+---
+
+## Channel/Communication Index
+
+### Channel: `ManagerService.IncomingCh`
+- **Type**: `chan models.ChatMessage`
+- **Buffer Size**: 10 (configured in NewManagerService)
+- **Producer(s)**:
+  - `BotService.handleIncomingMessage()` (Telegram messages)
+  - `BotService.handleEditedMessage()` (Telegram edits)
+  - `WSClient.readPump()` (WebSocket messages)
+- **Consumer**: `ManagerService.Run()` main loop
+- **Purpose**: Central inbox for all messages from all client types
+- **Processing**:
+  - `command_*` types → routed to specific handlers
+  - `text|photo|video|...` → SaveMessage() + PublishMessage()
+
+### Channel: `ManagerService.MatchRequestCh`
+- **Type**: `chan models.SearchRequest`
+- **Buffer Size**: 10
+- **Producer(s)**:
+  - `ManagerService.Run()` (when processing `command_start/search`)
+- **Consumer**: `MatcherService.Run()` main loop
+- **Purpose**: Queue users seeking partners
+- **Processing**: Add to `MatcherService.Queue`, call `findMatch()`
+
+### Channel: `ManagerService.RegisterCh`
+- **Type**: `chan Client`
+- **Buffer Size**: 10
+- **Producer(s)**:
+  - `BotService.getOrCreateClient()` (Telegram clients)
+  - WebSocket handler (WebSocket clients)
+- **Consumer**: `ManagerService.Run()`
+- **Purpose**: Register new client connections
+- **Processing**:
+  - Add to `Clients` map
+  - Check for active room in DB, restore if exists
+  - Send reconnection message
+
+### Channel: `ManagerService.UnregisterCh`
+- **Type**: `chan Client`
+- **Buffer Size**: 10
+- **Producer(s)**:
+  - `Client.Close()` (on disconnect)
+- **Consumer**: `ManagerService.Run()`
+- **Purpose**: Handle client disconnections
+- **Processing**:
+  - Remove from `Clients` map
+  - (Future: mark room as inactive after timeout)
+
+### Channel: `Client.Send`
+- **Type**: `chan models.ChatMessage`
+- **Buffer Size**: 10 (per client)
+- **Producer(s)**:
+  - `ManagerService.Run()` (system messages, match notifications)
+  - `StartPubSubListener()` (messages from Redis Pub/Sub)
+- **Consumer**: `Client.writePump()` goroutine
+- **Purpose**: Outbound message queue for each client
+- **Processing**:
+  - Telegram: Converted to tgbotapi.Chattable, sent via BotAPI
+  - WebSocket: JSON marshaled, written to WebSocket conn
+- **Backpressure Handling**: Uses `select` with `default` case to detect full channel
+
+### Redis Pub/Sub Channels
+- **Channel Name**: `{roomID}` (UUID string)
+- **Pattern Subscription**: `*` (all channels)
+- **Publisher**: `Storage.PublishMessage()` (called by ManagerService)
+- **Subscriber**: All Go instances via `StartPubSubListener()`
+- **Payload**: JSON-marshaled `models.ChatMessage`
+- **Purpose**: Horizontal scaling - broadcast messages to all instances
+- **Processing**:
+  - Unmarshal JSON
+  - Find local clients with matching `roomID`
+  - Send to `Client.Send` channel
+
+---
+
+## Command Flow Diagrams
+
+### `/start` Command Flow
+```
+User sends "/start"
+  ↓
+BotService.handleIncomingMessage()
+  → msg.IsCommand() = true
+  → handleTextMessage() sets Type = "command_start"
+  ↓
+Hub.IncomingCh ← ChatMessage{Type: "command_start"}
+  ↓
+ManagerService.Run() detects command_start
+  → Creates SearchRequest{UserID: anonID}
+  → Hub.MatchRequestCh ← SearchRequest
+  → Client.Send ← {Type: "system_search_start", Content: "🔍 Searching..."}
+  ↓
+MatcherService.Run() receives SearchRequest
+  → Add to Queue map
+  → Call findMatch()
+  → IF partner found:
+      → Generate roomID (UUID)
+      → Storage.SaveRoom()
+      → Client1.SetRoomID(roomID)
+      → Client2.SetRoomID(roomID)
+      → Client1.Send ← {Type: "system_match_found", Content: "Match found!"}
+      → Client2.Send ← {Type: "system_match_found", Content: "Match found!"}
+      → delete(Queue, user1)
+      → delete(Queue, user2)
+  → ELSE:
+      → User remains in Queue
+```
+
+### Message Send Flow
+```
+User A sends "Hello" to User B
+  ↓
+BotService.handleIncomingMessage()
+  → Creates ChatMessage{Type: "text", Content: "Hello", RoomID: "abc123"}
+  ↓
+Hub.IncomingCh ← ChatMessage
+  ↓
+ManagerService.Run()
+  → Storage.SaveMessage() → PostgreSQL
+  → msg.ID populated (e.g., 42)
+  → Storage.PublishMessage("abc123", msg) → Redis Pub/Sub
+  ↓
+Redis broadcasts to ALL Go instances
+  ↓
+StartPubSubListener() on Instance 1 (User A's instance):
+  → Finds Client A with roomID "abc123"
+  → Client A.Send ← msg (echo back to sender)
+  ↓
+StartPubSubListener() on Instance 2 (User B's instance):
+  → Finds Client B with roomID "abc123"
+  → Client B.Send ← msg
+  ↓
+Client B.writePump()
+  → buildTelegramMessage()
+  → BotAPI.Send() → Telegram API
+  ↓
+User B sees "Hello" in Telegram
+```
+
+### Edit Message Flow
+```
+User A edits "Hello" → "Hello world!"
+  ↓
+BotService.handleEditedMessage()
+  → FindOriginalHistoryIDByTgIDMedia(msg.MessageID)
+  → FindHistoryByID(originalHistoryID)
+  → extractMediaInfo() → newContent
+  → ChatMessage{
+      Type: "text",
+      Content: "Hello world!",
+      ReplyToMessageID: originalHistoryID
+    }
+  ↓
+Hub.IncomingCh ← ChatMessage
+  ↓
+ManagerService.Run()
+  → Storage.SaveMessage() (creates new history entry)
+  → Storage.PublishMessage()
+  ↓
+Redis → All instances
+  ↓
+Client B.writePump()
+  → Detects Type = "edit" (set by Hub based on ReplyToMessageID)
+  → buildTelegramMessage() creates EditMessageText
+  → BotAPI.Send()
+  ↓
+User B sees edited message
+```
+
+---
+
+## Configuration Schema
+
+### Environment Variables (.env)
+```yaml
+postgres:
+  host: DB_HOST
+  port: DB_PORT
+  user: DB_USER
+  password: DB_PASSWORD
+  database: DB_NAME
+
+redis:
+  address: REDIS_ADDR  # format: host:port
+  password: REDIS_PASSWORD
+  database: REDIS_DB   # integer 0-15
+
+telegram:
+  bot_token: TELEGRAM_BOT_TOKEN
+
+server:
+  port: PORT  # HTTP server (Gin) port, default 8080
+```
+
+### Database Connection Strings
+```go
+// PostgreSQL (constructed in cmd/main.go)
+dsn := fmt.Sprintf(
+    "host=%s user=%s password=%s dbname=%s port=%s sslmode=disable",
+    dbHost, dbUser, dbPassword, dbName, dbPort,
+)
+
+// Redis (go-redis/v9)
+rdb := redis.NewClient(&redis.Options{
+    Addr:     redisAddr,
+    Password: redisPassword,
+    DB:       redisDB,
+})
+```
+
+---
+
+## Testing Strategy
+
+### Unit Tests
+- **Location**: `*_test.go` files in same package
+- **Mocking**: `testify/mock` for Storage and Client interfaces
+- **Coverage**:
+  - `matcher_test.go`: Queue management, matching logic
+  - `user_test.go`: GORM hooks, UUID generation
+  - `mocks_test.go`: Shared mock implementations
+
+### Integration Tests (Recommended)
+- **DB Tests**: Use Docker PostgreSQL container with test fixtures
+- **Redis Tests**: Use `alicebob/miniredis/v2` for in-memory Redis
+- **E2E**: Simulate Telegram updates with `httptest.Server`
+
+### Run Tests
+```bash
+go test ./... -v -cover
+go test ./internal/chathub -run TestMatcherSuccessfulMatch
+```
+
+---
+
+## Deployment Topology
+
+### Single Instance (Development)
+```
+┌────────────────────────────────────┐
+│  Go Service (chatgogo)             │
+│  ┌──────────────────────────────┐  │
+│  │  BotService                  │  │
+│  │  ManagerService              │  │
+│  │  MatcherService              │  │
+│  └──────────────────────────────┘  │
+└────┬───────────────────────┬───────┘
+     │                       │
+     ▼                       ▼
+┌──────────┐           ┌──────────┐
+│PostgreSQL│           │  Redis   │
+└──────────┘           └──────────┘
+```
+
+### Horizontal Scaling (Production)
+```
+┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+│ Instance 1   │      │ Instance 2   │      │ Instance 3   │
+│ (User A)     │      │ (User B)     │      │ (User C)     │
+└──────┬───────┘      └──────┬───────┘      └──────┬───────┘
+       │                     │                     │
+       └──────────┬──────────┴──────────┬──────────┘
+                  ▼                     ▼
+           ┌────────────┐        ┌────────────┐
+           │ PostgreSQL │        │   Redis    │
+           │  (Primary) │        │ Pub/Sub    │
+           └────────────┘        └────────────┘
+```
+
+**Scaling Considerations**:
+- **Stateless Services**: All state in DB/Redis
+- **Pub/Sub for Cross-Instance**: Messages broadcast via Redis
+- **Load Balancer**: Not needed (users connect via Telegram Bot API)
+- **Database Connection Pool**: GORM MaxIdleConns, MaxOpenConns
+- **Redis Connection Pool**: go-redis default pooling
+
+---
+
+## Error Handling Patterns
+
+### Current Patterns
+```go
+// Pattern 1: Log and return
+if err != nil {
+    log.Printf("ERROR: Failed to save room: %v", err)
+    return err
+}
+
+// Pattern 2: Log and continue (non-critical)
+if err := s.Storage.SaveUserIfNotExists(telegramID); err != nil {
+    log.Printf("FATAL: Failed to ensure user: %v", err)
+    return // Abort message processing
+}
+
+// Pattern 3: Silent ignore (Redis Nil error)
+status, err := s.Redis.Get(s.Ctx, key).Result()
+if errors.Is(err, redis.Nil) {
+    return false, nil // Not banned
+}
+```
+
+### Retry Logic
+- **Not Implemented**: Consider adding exponential backoff for:
+  - Redis Pub/Sub reconnection
+  - PostgreSQL transient errors
+  - Telegram Bot API rate limits
+
+---
+
+## Performance Considerations
+
+### Bottlenecks
+1. **PostgreSQL Writes**: Every message creates a `chat_histories` row
+   - **Mitigation**: Batch inserts, partitioning by date
+2. **Redis Pub/Sub Fan-out**: Every message goes to ALL instances
+   - **Mitigation**: Instances filter by `roomID`, minimal overhead
+3. **GORM N+1 Queries**: `GetChatHistory()` doesn't use eager loading
+   - **Mitigation**: Add `.Preload()` if fetching related entities
+
+### Caching Strategy
+- **Active Rooms**: Cached in Redis (via `GetActiveRoomIDs()`)
+- **User Ban Status**: Redis keys `ban:{anonID}`
+- **Search Queue**: Redis set `search_queue`
+
+### Goroutine Management
+- **Per-Client Goroutines**: 1 per Telegram client (`writePump`)
+- **Service Goroutines**: 3 total (`ManagerService.Run`, `MatcherService.Run`, `StartPubSubListener`)
+- **Graceful Shutdown**: **Not Implemented** - Add signal handling
+
+---
+
+## Security Audit Checklist
+
+- [ ] **Input Validation**: Telegram update payloads sanitized
+- [ ] **SQL Injection**: GORM parameterized queries used
+- [ ] **XSS**: N/A (no HTML rendering)
+- [ ] **Rate Limiting**: Not implemented (use Redis counters)
+- [ ] **Authentication**: Delegated to Telegram
+- [ ] **Authorization**: Room membership checked before message delivery
+- [ ] **Secrets Management**: `.env` file (consider Vault for production)
+- [ ] **Logging**: No PII logged (only anonymous IDs)
+- [ ] **GDPR**: Data export/deletion endpoints missing
+
+---
+
+## Metrics & Observability
+
+### Recommended Metrics (Prometheus)
+```yaml
+# Counters
+chatgogo_messages_total{type="text|photo|video"}
+chatgogo_matches_total
+chatgogo_commands_total{command="start|stop|next"}
+
+# Gauges
+chatgogo_active_clients
+chatgogo_queue_size
+chatgogo_active_rooms
+
+# Histograms
+chatgogo_message_processing_duration_seconds
+chatgogo_match_duration_seconds
+```
+
+### Logging Levels (Future Enhancement)
+```
+DEBUG: Channel operations, client lifecycle
+INFO:  Match found, room created, user registered
+WARN:  Queue timeout, client send channel full
+ERROR: DB save failed, Redis publish failed
+FATAL: Unable to connect to DB/Redis
+```
+
+---
+
+## Glossary of Terms
+
+| Term | Definition |
+|------|------------|
+| AnonID | Anonymous user identifier (Telegram chat ID as string) |
+| RoomID | UUID for a 1:1 chat session |
+| Hub | Central ManagerService routing messages |
+| Matcher | MatcherService pairing users |
+| Client | Connection abstraction (Telegram or WebSocket) |
+| Send Channel | Buffered channel for outgoing messages per client |
+| Pub/Sub | Redis publish/subscribe for inter-instance messaging |
+| SearchRequest | Matchmaking queue entry |
+| ChatMessage | Internal message transport struct |
+| TgMessageID | Telegram-specific message identifier for replies/edits |
+
+---
+
+**End of LLM Context Index**

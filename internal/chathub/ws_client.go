@@ -19,7 +19,7 @@ const (
 
 // WebSocketClient реалізує інтерфейс chathub.Client
 type WebSocketClient struct {
-	AnonID string
+	UserID string
 	RoomID string
 	Conn   *websocket.Conn
 	Hub    *ManagerService
@@ -28,7 +28,7 @@ type WebSocketClient struct {
 
 // --- Реалізація методів інтерфейсу ---
 
-func (c *WebSocketClient) GetAnonID() string                         { return c.AnonID }
+func (c *WebSocketClient) GetUserID() string                         { return c.UserID }
 func (c *WebSocketClient) GetRoomID() string                         { return c.RoomID }
 func (c *WebSocketClient) SetRoomID(id string)                       { c.RoomID = id }
 func (c *WebSocketClient) GetSendChannel() chan<- models.ChatMessage { return c.Send }
@@ -74,11 +74,11 @@ func (c *WebSocketClient) readPump() {
 		var msg models.ChatMessage
 
 		if err := json.Unmarshal(message, &msg); err != nil {
-			log.Printf("Error decoding JSON from client %s: %v", c.AnonID, err)
+			log.Printf("Error decoding JSON from client %s: %v", c.UserID, err)
 			continue // Пропускаємо невірне повідомлення
 		}
 
-		msg.SenderID = c.AnonID
+		msg.SenderID = c.UserID
 
 		// Надсилаємо повідомлення у головний канал хаба
 		c.Hub.IncomingCh <- msg
@@ -106,7 +106,7 @@ func (c *WebSocketClient) writePump() {
 
 			dataToWrite, err := json.Marshal(message)
 			if err != nil {
-				log.Printf("Error encoding JSON for client %s: %v", c.AnonID, err)
+				log.Printf("Error encoding JSON for client %s: %v", c.UserID, err)
 				continue
 			}
 

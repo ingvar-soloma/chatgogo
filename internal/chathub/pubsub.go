@@ -53,7 +53,7 @@ func (m *ManagerService) StartPubSubListener() {
 					case client.GetSendChannel() <- chatMsg:
 						// OK
 					default:
-						log.Printf("WARNING: Client %s send channel full. Closing connection.", client.GetAnonID())
+						log.Printf("WARNING: Client %s send channel full. Closing connection.", client.GetUserID())
 						// Реалізація безпечного відключення
 						// delete(m.Clients, client.AnonID)
 						// close(client.Send)
@@ -79,15 +79,15 @@ func (m *ManagerService) Run() {
 		select {
 		case client := <-m.RegisterCh:
 			// Новий клієнт підключився (WebSocket/TG)
-			m.Clients[client.GetAnonID()] = client
-			log.Printf("Client registered: %s", client.GetAnonID())
+			m.Clients[client.GetUserID()] = client
+			log.Printf("Client registered: %s", client.GetUserID())
 
 			// !!! Перевірка на активну кімнату !!!
 			// Отримуємо RoomID клієнта з БД. Якщо є, встановлюємо його.
-			activeRoomID, err := m.Storage.GetActiveRoomIDForUser(client.GetAnonID())
+			activeRoomID, err := m.Storage.GetActiveRoomIDForUser(client.GetUserID())
 			if err == nil && activeRoomID != "" {
 				client.SetRoomID(activeRoomID)
-				log.Printf("Client %s reconnected and restored to room %s.", client.GetAnonID(), activeRoomID)
+				log.Printf("Client %s reconnected and restored to room %s.", client.GetUserID(), activeRoomID)
 				// Можна надіслати повідомлення про повторне підключення
 				client.GetSendChannel() <- models.ChatMessage{
 					Type:     "system_reconnect",
@@ -99,11 +99,11 @@ func (m *ManagerService) Run() {
 
 		case client := <-m.UnregisterCh:
 			// Клієнт відключився
-			if _, ok := m.Clients[client.GetAnonID()]; ok {
-				delete(m.Clients, client.GetAnonID())
+			if _, ok := m.Clients[client.GetUserID()]; ok {
+				delete(m.Clients, client.GetUserID())
 				client.Close() // Закриваємо канал, щоб WritePump завершилася
 				// ! Логіка розриву кімнати !
-				log.Printf("Client unregistered: %s", client.GetAnonID())
+				log.Printf("Client unregistered: %s", client.GetUserID())
 			}
 
 		case req := <-m.MatchRequestCh:
@@ -151,7 +151,7 @@ func (m *ManagerService) Run() {
 					case client.GetSendChannel() <- searchStartMessage:
 						// OK
 					default:
-						log.Printf("WARNING: Client %s send channel full during search start.", client.GetAnonID())
+						log.Printf("WARNING: Client %s send channel full during search start.", client.GetUserID())
 					}
 				}
 
@@ -340,7 +340,7 @@ func (m *ManagerService) Run() {
 					case initiatorClient.GetSendChannel() <- initiatorMessage:
 						// OK
 					default:
-						log.Printf("WARNING: Initiator client %s send channel full.", initiatorClient.GetAnonID())
+						log.Printf("WARNING: Initiator client %s send channel full.", initiatorClient.GetUserID())
 						// Не вдалося надіслати.
 					}
 				}

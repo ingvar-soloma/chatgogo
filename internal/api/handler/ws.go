@@ -42,7 +42,7 @@ func (h *Handler) ServeWebSocket(c *gin.Context) {
 	// 1. Створення нового клієнта
 	client := &chathub.WebSocketClient{
 		Hub:    h.Hub, // Додано посилання на Hub
-		AnonID: anonID,
+		UserID: anonID,
 		Conn:   conn, // Збереження з'єднання
 		Send:   make(chan models.ChatMessage, 256),
 	}

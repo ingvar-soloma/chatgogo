@@ -4,7 +4,7 @@ import "chatgogo/backend/internal/models"
 
 // Client — це інтерфейс для будь-якого типу підключення (WebSocket, Telegram тощо).
 type Client interface {
-	GetAnonID() string
+	GetUserID() string
 	GetRoomID() string
 	SetRoomID(string) // Потрібно для Matcher, щоб встановити кімнату
 

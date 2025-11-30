@@ -17,7 +17,7 @@ type Storage interface {
 	CloseRoom(roomID string) error
 	SaveComplaint(complaint *models.Complaint) error
 	SaveTgMessageID(historyID uint, anonID string, tgMsgID int) error
-	SaveUserIfNotExists(telegramID string) error
+	SaveUserIfNotExists(telegramID string) (*models.User, error)
 
 	PublishMessage(roomID string, msg models.ChatMessage) error
 
@@ -329,7 +329,7 @@ func (s *Service) GetRoomByID(roomID string) (*models.ChatRoom, error) {
 	}
 	return &room, nil
 }
-func (s *Service) SaveUserIfNotExists(telegramID string) error {
+func (s *Service) SaveUserIfNotExists(telegramID string) (*models.User, error) {
 	var user models.User
 
 	// Створюємо запис, який буде використовуватися, якщо користувача не знайдено
@@ -344,15 +344,15 @@ func (s *Service) SaveUserIfNotExists(telegramID string) error {
 
 	if result.Error != nil {
 		log.Printf("ERROR: Failed to save user %s on first contact: %v", telegramID, result.Error)
-		return result.Error
+		return nil, result.Error
 	}
 
 	if result.RowsAffected > 0 {
 		// Користувач був створений.
-		log.Printf("INFO: New user %s saved to database (AnonID: %s).", user.ID, telegramID)
+		log.Printf("INFO: New user %s saved to database (TelegramID: %s).", user.ID, telegramID)
 	}
 
-	return nil
+	return &user, nil
 }
 
 // AddUserToSearchQueue додає користувача до черги пошуку в Redis
