@@ -4,7 +4,6 @@ import (
 	"chatgogo/backend/internal/models"
 	"context"
 	"log"
-	"strconv"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -12,7 +11,7 @@ import (
 // SpoilerStorage defines the storage methods required by the spoiler handler.
 // This allows the handler to be tested and compiled without modifying the main Storage interface immediately.
 type SpoilerStorage interface {
-	SaveUserIfNotExists(telegramID string) (*models.User, error)
+	SaveUserIfNotExists(telegramID int64) (*models.User, error)
 	UpdateUserMediaSpoiler(userID string, value bool) error
 }
 
@@ -38,11 +37,8 @@ func HandleSpoilerCommand(ctx context.Context, update *tgbotapi.Update, s Spoile
 		return
 	}
 
-	// Convert Telegram ID to string
-	tgID := strconv.FormatInt(update.Message.From.ID, 10)
-
 	// Ensure user exists and get their internal ID
-	user, err := s.SaveUserIfNotExists(tgID)
+	user, err := s.SaveUserIfNotExists(update.Message.From.ID)
 	if err != nil {
 		log.Printf("Error retrieving user for spoiler command: %v", err)
 		responseText = "An error occurred while processing your request."

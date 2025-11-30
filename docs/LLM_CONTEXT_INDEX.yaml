@@ -21,7 +21,7 @@ purpose: "Machine-readable codebase structure for rapid LLM comprehension"
 - **Managing Service**: `storage.Service`
 - **Fields**:
   - `ID`: string (UUID)
-  - `TelegramID`: string (nullable, from Telegram Chat ID)
+  - `TelegramID`: int64 (nullable, from Telegram Chat ID)
   - `Age`: int
   - `Gender`: string
   - `Interests`: pq.StringArray (PostgreSQL text[] type)

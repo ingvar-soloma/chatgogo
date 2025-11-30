@@ -11,7 +11,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strconv"
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -55,11 +54,9 @@ func extractMessageContent(msg *tgbotapi.Message) string {
 
 // getOrCreateClient retrieves an existing Telegram client or creates a new one.
 func (s *BotService) getOrCreateClient(chatID int64) *Client {
-	anonID := strconv.FormatInt(chatID, 10)
-
-	user, err := s.Storage.SaveUserIfNotExists(anonID)
+	user, err := s.Storage.SaveUserIfNotExists(chatID)
 	if err != nil {
-		log.Printf("FATAL: Failed to get/create user for TelegramID %s: %v", anonID, err)
+		log.Printf("FATAL: Failed to get/create user for TelegramID %s: %v", chatID, err)
 		return nil
 	}
 	userID := user.ID
@@ -68,12 +65,12 @@ func (s *BotService) getOrCreateClient(chatID int64) *Client {
 		if client, ok := existingClient.(*Client); ok {
 			return client
 		}
-		log.Printf("ERROR: Client %s (User: %s) is not of type *telegram.Client", anonID, userID)
+		log.Printf("ERROR: Client %s (User: %s) is not of type *telegram.Client", chatID, userID)
 	}
 
 	newClient := &Client{
 		UserID:    userID,
-		AnonID:    anonID,
+		AnonID:    chatID,
 		Hub:       s.Hub,
 		Send:      make(chan models.ChatMessage, 10),
 		BotAPI:    s.BotAPI,
@@ -84,7 +81,7 @@ func (s *BotService) getOrCreateClient(chatID int64) *Client {
 	activeRoomID, err := s.Storage.GetActiveRoomIDForUser(userID)
 	if err == nil && activeRoomID != "" {
 		newClient.SetRoomID(activeRoomID)
-		log.Printf("Client %s (User: %s) restored to room %s synchronously.", anonID, userID, activeRoomID)
+		log.Printf("Client %s (User: %s) restored to room %s synchronously.", chatID, userID, activeRoomID)
 	}
 
 	s.Hub.RegisterCh <- newClient
@@ -114,16 +111,12 @@ func (s *BotService) RestoreActiveSessions() {
 				log.Printf("Failed to find user %s for restoration: %v", userIDStr, err)
 				return
 			}
-			if user.TelegramID == "" {
+			if user.TelegramID == 0 {
 				log.Printf("User %s has no Telegram ID, cannot restore session", userIDStr)
 				return
 			}
 
-			chatID, err := strconv.ParseInt(user.TelegramID, 10, 64)
-			if err != nil {
-				log.Printf("Invalid Telegram ID %s for user %s: %v", user.TelegramID, userIDStr, err)
-				return
-			}
+			chatID := user.TelegramID
 			s.getOrCreateClient(chatID)
 		}
 		restoreUser(room.User1ID)

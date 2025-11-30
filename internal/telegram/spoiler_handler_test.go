@@ -14,7 +14,7 @@ type MockSpoilerStorage struct {
 	mock.Mock
 }
 
-func (m *MockSpoilerStorage) SaveUserIfNotExists(telegramID string) (*models.User, error) {
+func (m *MockSpoilerStorage) SaveUserIfNotExists(telegramID int64) (*models.User, error) {
 	args := m.Called(telegramID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -43,9 +43,9 @@ func TestHandleSpoilerCommand_On(t *testing.T) {
 		},
 	}
 
-	user := &models.User{ID: "user-uuid", TelegramID: "12345"}
+	user := &models.User{ID: "user-uuid", TelegramID: 12345}
 
-	mockStorage.On("SaveUserIfNotExists", "12345").Return(user, nil)
+	mockStorage.On("SaveUserIfNotExists", 12345).Return(user, nil)
 	mockStorage.On("UpdateUserMediaSpoiler", "user-uuid", true).Return(nil)
 
 	// Act

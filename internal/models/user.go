@@ -10,7 +10,7 @@ import (
 // It contains identification information, demographic data, and interests.
 type User struct {
 	ID                  string         `gorm:"primaryKey" json:"id"` // Anonymous UUID
-	TelegramID          string         `gorm:"uniqueIndex"`          // Can be nil
+	TelegramID          int64          `gorm:"uniqueIndex"`          // Can be nil
 	Age                 int            // User's age
 	Gender              string         // User's gender
 	Interests           pq.StringArray `gorm:"type:text[]"` // Used for storing tags/interests

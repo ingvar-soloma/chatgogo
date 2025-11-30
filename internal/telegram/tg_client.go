@@ -7,7 +7,6 @@ import (
 	"chatgogo/backend/internal/storage"
 	"log"
 	"reflect"
-	"strconv"
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -15,9 +14,9 @@ import (
 
 // Client implements the chathub.Client interface for Telegram users.
 type Client struct {
-	UserID  string // Internal UUID
-	AnonID  string // Telegram Chat ID
-	RoomID  string
+	UserID    string // Internal UUID
+	AnonID    int64  // Telegram Chat ID
+	RoomID    string
 	Hub       *chathub.ManagerService
 	Send      chan models.ChatMessage
 	BotAPI    *tgbotapi.BotAPI
@@ -113,12 +112,11 @@ func (c *Client) writePump() {
 			continue
 		}
 
-		chatID, _ := strconv.ParseInt(c.AnonID, 10, 64)
-		if chatID == 0 {
+		if c.AnonID == 0 {
 			continue
 		}
 
-		tgMsg := c.buildTelegramMessage(chatID, message)
+		tgMsg := c.buildTelegramMessage(c.AnonID, message)
 		if tgMsg == nil {
 			continue
 		}
