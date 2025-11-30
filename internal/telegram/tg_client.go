@@ -11,6 +11,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
+// Client implements the chathub.Client interface for Telegram users.
 type Client struct {
 	UserID  string // Internal UUID
 	AnonID  string // Telegram Chat ID
@@ -21,17 +22,25 @@ type Client struct {
 	Storage storage.Storage
 }
 
-func (c *Client) GetUserID() string                         { return c.UserID }
-func (c *Client) GetRoomID() string                         { return c.RoomID }
-func (c *Client) SetRoomID(id string)                       { c.RoomID = id }
+// GetUserID returns the client's internal user ID.
+func (c *Client) GetUserID() string { return c.UserID }
+
+// GetRoomID returns the ID of the room the client is in.
+func (c *Client) GetRoomID() string { return c.RoomID }
+
+// SetRoomID sets the client's current room ID.
+func (c *Client) SetRoomID(id string) { c.RoomID = id }
+
+// GetSendChannel returns the client's outbound message channel.
 func (c *Client) GetSendChannel() chan<- models.ChatMessage { return c.Send }
 
-func (c *Client) Run()   { go c.writePump() }
+// Run starts the client's write pump.
+func (c *Client) Run() { go c.writePump() }
+
+// Close closes the client's send channel.
 func (c *Client) Close() { close(c.Send) }
 
-// --- Допоміжні функції ---
-
-// setReplyID — скорочений варіант через reflection
+// setReplyID sets the ReplyToMessageID field on a Telegram message if applicable.
 func (c *Client) setReplyID(tgMsg tgbotapi.Chattable, originalHistoryID uint) tgbotapi.Chattable {
 	if c.Storage == nil {
 		return tgMsg
@@ -44,12 +53,10 @@ func (c *Client) setReplyID(tgMsg tgbotapi.Chattable, originalHistoryID uint) tg
 	replyTgID := int(*replyTgIDUint)
 
 	v := reflect.ValueOf(tgMsg)
-
-	// 🔹 Якщо це структура (value), створюємо адресне значення
 	if v.Kind() == reflect.Struct {
-		ptr := reflect.New(v.Type()) // *MessageConfig
-		ptr.Elem().Set(v)            // копіюємо старі поля
-		v = ptr                      // тепер v — pointer
+		ptr := reflect.New(v.Type())
+		ptr.Elem().Set(v)
+		v = ptr
 	}
 
 	if v.Kind() == reflect.Ptr {
@@ -60,18 +67,17 @@ func (c *Client) setReplyID(tgMsg tgbotapi.Chattable, originalHistoryID uint) tg
 			return v.Interface().(tgbotapi.Chattable)
 		}
 	}
-
 	return tgMsg
 }
 
-// escapeMarkdownV2 — залишено як заглушку
+// escapeMarkdownV2 is a placeholder for a function that would escape text for Telegram's MarkdownV2 parse mode.
 func escapeMarkdownV2(text string) string {
 	return text
 }
 
-// --- Основна логіка ---
+// writePump pumps messages from the hub to the Telegram user.
 func (c *Client) writePump() {
-	defer log.Printf("Зупинка writePump для Telegram клієнта %s (User: %s)", c.AnonID, c.UserID)
+	defer log.Printf("Stopping writePump for Telegram client %s (User: %s)", c.AnonID, c.UserID)
 
 	for message := range c.Send {
 		if message.SenderID == c.UserID && message.Type != "system_info" {
@@ -88,19 +94,16 @@ func (c *Client) writePump() {
 			continue
 		}
 
-		// Встановлення ReplyToMessageID
 		if message.ReplyToMessageID != nil {
 			tgMsg = c.setReplyID(tgMsg, *message.ReplyToMessageID)
 		}
 
-		// Відправка
 		sentMsg, err := c.BotAPI.Send(tgMsg)
 		if err != nil {
 			log.Printf("ERROR: Failed to send Telegram message to %s: %v", c.AnonID, err)
 			continue
 		}
 
-		// Збереження MessageID
 		if message.ID != 0 && c.Storage != nil {
 			if err := c.Storage.SaveTgMessageID(uint(message.ID), c.UserID, sentMsg.MessageID); err != nil {
 				log.Printf("ERROR: Failed to save Telegram Message ID %d for history %d: %v", sentMsg.MessageID, message.ID, err)
@@ -109,42 +112,26 @@ func (c *Client) writePump() {
 	}
 }
 
+// buildTelegramMessage constructs a `tgbotapi.Chattable` from a `models.ChatMessage`.
 func (c *Client) buildTelegramMessage(chatID int64, message models.ChatMessage) tgbotapi.Chattable {
-	//const parseMode = tgbotapi.ModeMarkdownV2
 	const parseMode = tgbotapi.ModeMarkdown
 	content := escapeMarkdownV2(message.Content)
-	//metadata := escapeMarkdownV2(message.Metadata)
 
-	// --- 1. Обробка РЕДАГУВАННЯ (edit) ---
 	if message.Type == "edit" {
-		// Ми очікуємо, що Hub встановив TgMessageIDSender у TG ID повідомлення партнера, яке потрібно редагувати.
 		if message.TgMessageIDSender == nil {
 			log.Printf("ERROR: Cannot edit message without partner's TgMessageID. Sending as new message.")
-			// Fallback: Відправити як нове повідомлення (стара логіка)
-			msg := tgbotapi.NewMessage(chatID, "✏️ *Редаговано:*\n"+content)
+			msg := tgbotapi.NewMessage(chatID, "✏️ *Edited:*\n"+content)
 			msg.ParseMode = parseMode
 			return msg
 		}
-
 		tgIDToEdit := int(*message.TgMessageIDSender)
 
-		// 1.1. Редагування Caption (якщо є Metadata, це медіа, Content - це новий Caption)
 		if message.Metadata != "" {
-			editConfig := tgbotapi.NewEditMessageCaption(
-				chatID,
-				tgIDToEdit,
-				content, // Content - це НОВИЙ Caption
-			)
+			editConfig := tgbotapi.NewEditMessageCaption(chatID, tgIDToEdit, content)
 			editConfig.ParseMode = parseMode
 			return editConfig
 		}
-
-		// 1.2. Редагування тексту
-		editConfig := tgbotapi.NewEditMessageText(
-			chatID,
-			tgIDToEdit,
-			content,
-		)
+		editConfig := tgbotapi.NewEditMessageText(chatID, tgIDToEdit, content)
 		editConfig.ParseMode = parseMode
 		return editConfig
 	}
@@ -154,21 +141,17 @@ func (c *Client) buildTelegramMessage(chatID int64, message models.ChatMessage) 
 		msg := tgbotapi.NewMessage(chatID, content)
 		msg.ParseMode = parseMode
 		return msg
-
 	case "photo", "video", "animation":
 		if message.ReplyToMessageID != nil {
 			originalHistory, err := c.Storage.FindHistoryByID(*message.ReplyToMessageID)
-
 			if err != nil || originalHistory == nil {
 				log.Printf("ERROR: Failed to fetch original history record %d: %v", *message.ReplyToMessageID, err)
 			}
-
 			if originalHistory.Content == message.Content {
 				msg := tgbotapi.NewMessage(chatID, message.Metadata)
 				msg.ParseMode = parseMode
 				return msg
 			}
-
 		}
 		if message.Content == "" {
 			log.Printf("ERROR: Media message (%s) missing FileID", message.Type)
@@ -191,45 +174,36 @@ func (c *Client) buildTelegramMessage(chatID int64, message models.ChatMessage) 
 			msg.Caption, msg.ParseMode = caption, parseMode
 			return msg
 		}
-
 	case "sticker":
 		return tgbotapi.NewSticker(chatID, tgbotapi.FileID(message.Content))
-
 	case "voice":
 		return tgbotapi.NewVoice(chatID, tgbotapi.FileID(message.Content))
-
 	case "video_note":
 		return tgbotapi.NewVideoNote(chatID, 0, tgbotapi.FileID(message.Content))
-
 	case "system_search_start", "system_reconnect":
 		msg := tgbotapi.NewMessage(chatID, content)
 		msg.ParseMode = parseMode
 		return msg
-
 	case "system_match_found":
 		c.RoomID = message.RoomID
-		msg := tgbotapi.NewMessage(chatID, "✅ **Співрозмовника знайдено!** Починайте спілкування.")
+		msg := tgbotapi.NewMessage(chatID, "✅ **Match found!** Start chatting.")
 		msg.ParseMode = parseMode
 		return msg
-
 	case "system_match_stop_self":
 		c.RoomID = ""
-		msg := tgbotapi.NewMessage(chatID, "🚪 **Чат завершено.** Ви вийшли з кімнати. Напишіть `/start`, щоб знайти нового співрозмовника.")
+		msg := tgbotapi.NewMessage(chatID, "🚪 **Chat ended.** You left the room. Type /start to find a new partner.")
 		msg.ParseMode = parseMode
 		return msg
-
 	case "system_match_stop_partner":
 		c.RoomID = ""
-		msg := tgbotapi.NewMessage(chatID, "🚫 **Чат завершено.** Співрозмовник покинув чат. Напишіть `/start`, щоб знайти нового співрозмовника.")
+		msg := tgbotapi.NewMessage(chatID, "🚫 **Chat ended.** Your partner left the chat. Type /start to find a new partner.")
 		msg.ParseMode = parseMode
 		return msg
-
 	default:
 		log.Printf("Unhandled message type in buildTelegramMessage: %s", message.Type)
-		msg := tgbotapi.NewMessage(chatID, "⚠️ Непідтримуваний тип повідомлення.")
+		msg := tgbotapi.NewMessage(chatID, "⚠️ Unsupported message type.")
 		msg.ParseMode = parseMode
 		return msg
 	}
-
 	return nil
 }

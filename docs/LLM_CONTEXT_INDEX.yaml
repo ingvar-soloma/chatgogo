@@ -32,7 +32,7 @@ purpose: "Machine-readable codebase structure for rapid LLM comprehension"
   - `MatcherService` (future: gender/age filtering)
 
 #### ChatRoom
-- **Struct**: `models.ChatRoom` (`internal/models/room.go` - inferred)
+- **Struct**: `models.ChatRoom` (`internal/models/chatroom.go`)
 - **Persistent Layer**: PostgreSQL table `chat_rooms`
 - **Primary Key**: `RoomID` (UUID string)
 - **Managing Service**: `storage.Service`, `MatcherService`
@@ -49,7 +49,7 @@ purpose: "Machine-readable codebase structure for rapid LLM comprehension"
 - **Indexing**: Active rooms are cached in Redis for fast retrieval
 
 #### ChatHistory
-- **Struct**: `models.ChatHistory` (`internal/models/history.go` - inferred)
+- **Struct**: `models.ChatHistory` (`internal/models/chat_history.go`)
 - **Persistent Layer**: PostgreSQL table `chat_histories`
 - **Primary Key**: `ID` (auto-increment uint)
 - **Managing Service**: `storage.Service`
@@ -69,7 +69,7 @@ purpose: "Machine-readable codebase structure for rapid LLM comprehension"
   - `FindOriginalHistoryIDByTgIDMedia()` - for media edit handling (uses DISTINCT ON)
 
 #### Complaint
-- **Struct**: `models.Complaint` (`internal/models/complaint.go` - inferred)
+- **Struct**: `models.Complaint` (`internal/models/complaint.go`)
 - **Persistent Layer**: PostgreSQL table `complaints`
 - **Managing Service**: `storage.Service`
 - **Fields** (inferred):

@@ -1,12 +1,20 @@
 # ChatGoGo - Anonymous Chat Backend
 
+## About The Project
+
+ChatGoGo is a backend service for an anonymous chat application, enabling users to connect and communicate without revealing their identities. Built with Go, it leverages a powerful stack including PostgreSQL for data persistence, Redis for caching and real-time messaging, and the Telegram Bot API for client communication. The architecture is designed to be scalable and maintainable, with a clear separation of concerns between different services.
+
+## Go Version
+
+This project is built using Go `1.21.3`.
+
 ## 🚀 Quick Start Guide
 
 ### Prerequisites
 
 Before running ChatGoGo locally, ensure you have:
 
-- **Go 1.25.3+** - [Download](https://go.dev/dl/)
+- **Go 1.21.3+** - [Download](https://go.dev/dl/)
 - **Docker & Docker Compose** - [Install](https://docs.docker.com/get-docker/)
 - **Telegram Bot Token** - Create a bot via [@BotFather](https://t.me/botfather)
 - **Make** (optional) - For convenient commands

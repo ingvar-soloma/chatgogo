@@ -2,20 +2,27 @@ package models
 
 import "gorm.io/gorm"
 
-// ChatHistory представляє збережене повідомлення чату в PostgreSQL.
-// ID, CreatedAt, UpdatedAt (з gorm.Model) будуть використовуватися як MessageID та Timestamp.
+// ChatHistory represents a saved chat message in the PostgreSQL database.
+// The embedded gorm.Model provides ID, CreatedAt, UpdatedAt, and DeletedAt fields,
+// which serve as the message ID and timestamps.
 type ChatHistory struct {
-	gorm.Model // Включає поля ID (primary key, uint), CreatedAt, UpdatedAt, DeletedAt
+	gorm.Model // Includes fields ID (primary key, uint), CreatedAt, UpdatedAt, DeletedAt
 
-	RoomID           string `gorm:"type:uuid;not null;index:idx_room_msg"` // Ідентифікатор кімнати
-	SenderID         string `gorm:"type:text;not null;index:idx_room_msg"` // AnonID користувача
-	Content          string `gorm:"type:text;not null"`                    // Вміст повідомлення
-	Type             string `gorm:"type:text;not null"`                    // "text", "photo", "typing", "media_url"
-	Metadata         string `gorm:"type:text"`                             // Додаткова інформація
-	ReplyToMessageID *uint  `gorm:"index"`                                 // Посилання на ID повідомлення (з ChatHistory.ID), на яке робиться реплай
+	// RoomID is the identifier of the chat room where the message was sent.
+	RoomID string `gorm:"type:uuid;not null;index:idx_room_msg"`
+	// SenderID is the anonymous ID of the user who sent the message.
+	SenderID string `gorm:"type:text;not null;index:idx_room_msg"`
+	// Content is the main content of the message (e.g., text, file ID).
+	Content string `gorm:"type:text;not null"`
+	// Type indicates the kind of message (e.g., "text", "photo", "typing").
+	Type string `gorm:"type:text;not null"`
+	// Metadata contains additional information, such as captions for media.
+	Metadata string `gorm:"type:text"`
+	// ReplyToMessageID is a reference to the ID of the message being replied to.
+	ReplyToMessageID *uint `gorm:"index"`
 
-	// Telegram Message ID повідомлення для Оригінального Відправника (SenderID)
+	// TgMessageIDSender is the Telegram message ID for the original sender.
 	TgMessageIDSender *uint `gorm:"index"`
-	// Telegram Message ID повідомлення для Оригінального Одержувача (Partner ID)
+	// TgMessageIDReceiver is the Telegram message ID for the message's recipient.
 	TgMessageIDReceiver *uint `gorm:"index"`
 }
