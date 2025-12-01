@@ -26,6 +26,51 @@ func (m *MockStorage) IsUserBanned(anonID string) (bool, error) {
 	return args.Bool(0), args.Error(1)
 }
 
+func (m *MockStorage) UpdateUserAge(userID string, age int) error {
+	args := m.Called(userID, age)
+	return args.Error(0)
+}
+
+func (m *MockStorage) UpdateUserGender(userID string, gender string) error {
+	args := m.Called(userID, gender)
+	return args.Error(0)
+}
+
+func (m *MockStorage) UpdateUserInterests(userID string, interests []string) error {
+	args := m.Called(userID, interests)
+	return args.Error(0)
+}
+
+func (m *MockStorage) SetUserAttribute(userID string, key string, value string) error {
+	args := m.Called(userID, key, value)
+	return args.Error(0)
+}
+
+func (m *MockStorage) GetUserAttribute(userID string, key string) (string, error) {
+	args := m.Called(userID, key)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockStorage) DeleteUserAttribute(userID string, key string) error {
+	args := m.Called(userID, key)
+	return args.Error(0)
+}
+
+func (m *MockStorage) SetUserState(userID string, state string) error {
+	args := m.Called(userID, state)
+	return args.Error(0)
+}
+
+func (m *MockStorage) GetUserState(userID string) (string, error) {
+	args := m.Called(userID)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockStorage) ClearUserState(userID string) error {
+	args := m.Called(userID)
+	return args.Error(0)
+}
+
 func (m *MockStorage) SaveRoom(room *models.ChatRoom) error {
 	args := m.Called(room)
 	return args.Error(0)
