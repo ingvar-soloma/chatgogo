@@ -105,7 +105,7 @@ func escapeMarkdownV2(text string) string {
 
 // writePump pumps messages from the hub to the Telegram user.
 func (c *Client) writePump() {
-	defer log.Printf("Stopping writePump for Telegram client %s (User: %s)", c.AnonID, c.UserID)
+	defer log.Printf("Stopping writePump for Telegram client %d (User: %s)", c.AnonID, c.UserID)
 
 	for message := range c.Send {
 		if message.SenderID == c.UserID && message.Type != "system_info" {
@@ -127,7 +127,7 @@ func (c *Client) writePump() {
 
 		sentMsg, err := c.BotAPI.Send(tgMsg)
 		if err != nil {
-			log.Printf("ERROR: Failed to send Telegram message to %s: %v", c.AnonID, err)
+			log.Printf("ERROR: Failed to send Telegram message to %d: %v", c.AnonID, err)
 			continue
 		}
 

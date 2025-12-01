@@ -16,7 +16,7 @@ func (m *MockStorage) SaveUser(user *models.User) error {
 	return args.Error(0)
 }
 
-func (m *MockStorage) SaveUserIfNotExists(telegramID string) (*models.User, error) {
+func (m *MockStorage) SaveUserIfNotExists(telegramID int64) (*models.User, error) {
 	args := m.Called(telegramID)
 	return args.Get(0).(*models.User), args.Error(1)
 }

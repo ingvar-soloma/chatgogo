@@ -56,7 +56,7 @@ func extractMessageContent(msg *tgbotapi.Message) string {
 func (s *BotService) getOrCreateClient(chatID int64) *Client {
 	user, err := s.Storage.SaveUserIfNotExists(chatID)
 	if err != nil {
-		log.Printf("FATAL: Failed to get/create user for TelegramID %s: %v", chatID, err)
+		log.Printf("FATAL: Failed to get/create user for TelegramID %d: %v", chatID, err)
 		return nil
 	}
 	userID := user.ID
@@ -65,7 +65,7 @@ func (s *BotService) getOrCreateClient(chatID int64) *Client {
 		if client, ok := existingClient.(*Client); ok {
 			return client
 		}
-		log.Printf("ERROR: Client %s (User: %s) is not of type *telegram.Client", chatID, userID)
+		log.Printf("ERROR: Client %d (User: %s) is not of type *telegram.Client", chatID, userID)
 	}
 
 	newClient := &Client{
@@ -81,7 +81,7 @@ func (s *BotService) getOrCreateClient(chatID int64) *Client {
 	activeRoomID, err := s.Storage.GetActiveRoomIDForUser(userID)
 	if err == nil && activeRoomID != "" {
 		newClient.SetRoomID(activeRoomID)
-		log.Printf("Client %s (User: %s) restored to room %s synchronously.", chatID, userID, activeRoomID)
+		log.Printf("Client %d (User: %s) restored to room %s synchronously.", chatID, userID, activeRoomID)
 	}
 
 	s.Hub.RegisterCh <- newClient

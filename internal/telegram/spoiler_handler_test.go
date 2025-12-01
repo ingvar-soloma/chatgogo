@@ -45,7 +45,7 @@ func TestHandleSpoilerCommand_On(t *testing.T) {
 
 	user := &models.User{ID: "user-uuid", TelegramID: 12345}
 
-	mockStorage.On("SaveUserIfNotExists", 12345).Return(user, nil)
+	mockStorage.On("SaveUserIfNotExists", int64(12345)).Return(user, nil)
 	mockStorage.On("UpdateUserMediaSpoiler", "user-uuid", true).Return(nil)
 
 	// Act
