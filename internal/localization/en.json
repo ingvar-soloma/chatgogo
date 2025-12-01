@@ -12,5 +12,13 @@
   "system_reconnect": "✅ Connection restored.",
   "system_match_found": "✅ **Match found!** Start chatting.",
   "system_match_stop_self": "🚪 **Chat ended.** You left the room. Type /start to find a new partner.",
-  "system_match_stop_partner": "🚫 **Chat ended.** Your partner left the chat. Type /start to find a new partner."
+  "system_match_stop_partner": "🚫 **Chat ended.** Your partner left the chat. Type /start to find a new partner.",
+  "report_reason_prompt": "Please select a reason for your report:",
+  "report_reason_critical": "Direct harm, threats, illegal actions.",
+  "report_reason_medium": "Systematic low quality of communication, unwanted content.",
+  "report_reason_low": "Personal discomfort, minor deviations from the rules.",
+  "report_provide_reason": "Please provide a reason for your report.",
+  "report_submitted": "Your report has been submitted.",
+  "report_not_in_chat": "You can only report a user while in a chat.",
+  "user_blocked": "You are currently blocked. Time remaining: %v"
 }

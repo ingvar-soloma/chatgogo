@@ -2,6 +2,7 @@ package chathub_test
 
 import (
 	"chatgogo/backend/internal/models"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/mock"
@@ -86,6 +87,14 @@ func (m *MockStorage) SaveComplaint(complaint *models.Complaint) error {
 	return args.Error(0)
 }
 
+func (m *MockStorage) GetComplaintByID(complaintID uint) (*models.Complaint, error) {
+	args := m.Called(complaintID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*models.Complaint), args.Error(1)
+}
+
 func (m *MockStorage) AddUserToSearchQueue(userID string) error {
 	args := m.Called(userID)
 	return args.Error(0)
@@ -125,6 +134,26 @@ func (m *MockStorage) GetUserByID(userID string) (*models.User, error) {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*models.User), args.Error(1)
+}
+
+func (m *MockStorage) UpdateUser(user *models.User) error {
+	args := m.Called(user)
+	return args.Error(0)
+}
+
+func (m *MockStorage) UpdateUserReputation(userID string, change int) error {
+	args := m.Called(userID, change)
+	return args.Error(0)
+}
+
+func (m *MockStorage) GetComplaintsForUser(userID string, since time.Time) ([]models.Complaint, error) {
+	args := m.Called(userID, since)
+	return args.Get(0).([]models.Complaint), args.Error(1)
+}
+
+func (m *MockStorage) GetLastBanDate(userID string) (int64, error) {
+	args := m.Called(userID)
+	return args.Get(0).(int64), args.Error(1)
 }
 
 func (m *MockStorage) UpdateUserLanguage(telegramID int64, languageCode string) error {

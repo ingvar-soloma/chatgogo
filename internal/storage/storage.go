@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -18,6 +19,10 @@ import (
 type Storage interface {
 	// User operations
 	SaveUser(user *models.User) error
+	UpdateUser(user *models.User) error
+	UpdateUserReputation(userID string, change int) error
+	GetComplaintsForUser(userID string, since time.Time) ([]models.Complaint, error)
+	GetLastBanDate(userID string) (int64, error)
 	SaveUserIfNotExists(telegramID int64) (*models.User, error)
 	GetUserByTelegramID(telegramID int64) (*models.User, error)
 	IsUserBanned(anonID string) (bool, error)
@@ -43,6 +48,7 @@ type Storage interface {
 
 	// Complaint operations
 	SaveComplaint(complaint *models.Complaint) error
+	GetComplaintByID(complaintID uint) (*models.Complaint, error)
 
 	// Search Queue operations
 	AddUserToSearchQueue(userID string) error
@@ -75,6 +81,50 @@ func NewStorageService(db *gorm.DB, rdb *redis.Client) Storage {
 // SaveUser saves a user record to the PostgreSQL database.
 func (s *Service) SaveUser(user *models.User) error {
 	return s.DB.Save(user).Error
+}
+
+// UpdateUser updates a user record in the PostgreSQL database.
+func (s *Service) UpdateUser(user *models.User) error {
+	return s.DB.Save(user).Error
+}
+
+// UpdateUserReputation updates a user's reputation score by a given amount, ensuring it stays between 0 and 1000.
+func (s *Service) UpdateUserReputation(userID string, change int) error {
+	return s.DB.Transaction(func(tx *gorm.DB) error {
+		var user models.User
+		if err := tx.Where("id = ?", userID).First(&user).Error; err != nil {
+			return err
+		}
+
+		newScore := user.ReputationScore + change
+		if newScore > 1000 {
+			newScore = 1000
+		} else if newScore < 0 {
+			newScore = 0
+		}
+
+		return tx.Model(&models.User{}).Where("id = ?", userID).Update("reputation_score", newScore).Error
+	})
+}
+
+// GetComplaintsForUser retrieves all complaints against a user since a given time.
+func (s *Service) GetComplaintsForUser(userID string, since time.Time) ([]models.Complaint, error) {
+	var complaints []models.Complaint
+	err := s.DB.Where("reported_user_id = ? AND created_at >= ?", userID, since).Find(&complaints).Error
+	return complaints, err
+}
+
+// GetLastBanDate retrieves the last ban date for a user.
+func (s *Service) GetLastBanDate(userID string) (int64, error) {
+	var user models.User
+	err := s.DB.Where("id = ?", userID).First(&user).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return user.LastBanDate, nil
 }
 
 // SaveRoom saves a chat room record to the PostgreSQL database.
@@ -135,6 +185,19 @@ func (s *Service) SaveComplaint(complaint *models.Complaint) error {
 		return result.Error
 	}
 	return nil
+}
+
+// GetComplaintByID retrieves a complaint by its ID.
+func (s *Service) GetComplaintByID(complaintID uint) (*models.Complaint, error) {
+	var complaint models.Complaint
+	err := s.DB.First(&complaint, complaintID).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &complaint, nil
 }
 
 // SaveMessage persists a ChatMessage to the PostgreSQL database as a ChatHistory record.

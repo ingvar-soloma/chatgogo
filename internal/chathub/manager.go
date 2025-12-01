@@ -3,9 +3,11 @@
 package chathub
 
 import (
+	"chatgogo/backend/internal/config"
 	"chatgogo/backend/internal/models"
 	"chatgogo/backend/internal/storage"
 	"log"
+	"time"
 )
 
 // ClientRestorer is a function type that defines a factory for creating a Client.
@@ -152,6 +154,8 @@ func (m *ManagerService) handleIncomingMessage(message models.ChatMessage) {
 	case "command_stop", "command_next":
 		m.handleStopCommand(message)
 		return
+	case "command_report":
+		return // Handled in telegram package
 	}
 
 	if err := m.Storage.SaveMessage(&message); err != nil {
@@ -210,6 +214,60 @@ func (m *ManagerService) handleStopCommand(message models.ChatMessage) {
 	// If it was a /next command, re-queue the sender
 	if message.Type == "command_next" {
 		m.MatchRequestCh <- models.SearchRequest{UserID: message.SenderID}
+	}
+
+	// Positive/Negative behavior logic
+	history, err := m.Storage.GetChatHistory(roomID)
+	if err != nil {
+		log.Printf("Error getting chat history: %v", err)
+		return
+	}
+	complaints, err := m.Storage.GetComplaintsForUser(room.User1ID, room.StartedAt)
+	if err != nil {
+		log.Printf("Error getting complaints for user: %v", err)
+		return
+	}
+	complaints2, err := m.Storage.GetComplaintsForUser(room.User2ID, room.StartedAt)
+	if err != nil {
+		log.Printf("Error getting complaints for user: %v", err)
+		return
+	}
+
+	if len(complaints) == 0 && len(complaints2) == 0 {
+		// No reports, check for positive or negative behavior
+		if time.Since(room.StartedAt) > config.SuccessfulDialogDuration {
+			user1Messages := 0
+			user2Messages := 0
+			for _, msg := range history {
+				if msg.SenderID == room.User1ID {
+					user1Messages++
+				} else {
+					user2Messages++
+				}
+			}
+			if user1Messages >= config.SuccessfulDialogMessages && user2Messages >= config.SuccessfulDialogMessages {
+				// Successful dialog
+				m.Storage.UpdateUserReputation(room.User1ID, config.SuccessfulDialogReward)
+				m.Storage.UpdateUserReputation(room.User2ID, config.SuccessfulDialogReward)
+			}
+		} else if time.Since(room.StartedAt) < config.EarlyDisconnectDuration {
+			// Early disconnect
+			partnerMessages := 0
+			var partnerID string
+			if message.SenderID == room.User1ID {
+				partnerID = room.User2ID
+			} else {
+				partnerID = room.User1ID
+			}
+			for _, msg := range history {
+				if msg.SenderID == partnerID {
+					partnerMessages++
+				}
+			}
+			if partnerMessages < config.EarlyDisconnectMessages {
+				m.Storage.UpdateUserReputation(message.SenderID, config.EarlyDisconnectPenalty)
+			}
+		}
 	}
 }
 
