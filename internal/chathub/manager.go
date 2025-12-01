@@ -207,6 +207,10 @@ func (m *ManagerService) handleStopCommand(message models.ChatMessage) {
 		log.Printf("ERROR: Failed to close room %s: %v", roomID, err)
 	}
 
+	// Store the last partner for both users, so they can be blocked after the chat ends.
+	m.Storage.SetUserAttribute(message.SenderID, "last_partner_id", partnerID)
+	m.Storage.SetUserAttribute(partnerID, "last_partner_id", message.SenderID)
+
 	// If it was a /next command, re-queue the sender
 	if message.Type == "command_next" {
 		m.MatchRequestCh <- models.SearchRequest{UserID: message.SenderID}

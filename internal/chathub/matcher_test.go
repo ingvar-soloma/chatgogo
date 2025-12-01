@@ -42,6 +42,7 @@ func TestMatcherSuccessfulMatch_Integration(t *testing.T) {
 	// Expect SaveRoom to be called
 	storageMock.On("SaveRoom", mock.AnythingOfType("*models.ChatRoom")).Return(nil).Once()
 	storageMock.On("RemoveUserFromSearchQueue", mock.AnythingOfType("string")).Return(nil)
+	storageMock.On("GetUsersByIDs", mock.AnythingOfType("[]string")).Return([]*models.User{{ID: "user_A"}, {ID: "user_B"}}, nil)
 
 	// Act - Manually add both users to the queue
 	matcher.Queue["user_A"] = models.SearchRequest{UserID: "user_A"}
@@ -71,6 +72,8 @@ func TestMatcherNoSelfMatch(t *testing.T) {
 	client := newMockClient("user_solo")
 	hub.Clients["user_solo"] = client
 
+	storageMock.On("GetUsersByIDs", mock.AnythingOfType("[]string")).Return([]*models.User{{ID: "user_solo"}}, nil)
+
 	// Act - Add only one user to queue
 	matcher.Queue["user_solo"] = models.SearchRequest{UserID: "user_solo"}
 	matcher.FindMatch(models.SearchRequest{UserID: "user_solo"})
@@ -93,6 +96,7 @@ func TestMatcherQueueRemoval(t *testing.T) {
 
 	storageMock.On("SaveRoom", mock.AnythingOfType("*models.ChatRoom")).Return(nil).Once()
 	storageMock.On("RemoveUserFromSearchQueue", mock.AnythingOfType("string")).Return(nil)
+	storageMock.On("GetUsersByIDs", mock.AnythingOfType("[]string")).Return([]*models.User{{ID: "user_X"}, {ID: "user_Y"}}, nil)
 
 	clientA := newMockClient("user_X")
 	clientB := newMockClient("user_Y")
@@ -143,4 +147,39 @@ func TestAddUserToQueue(t *testing.T) {
 	// Assert
 	assert.Contains(t, matcher.Queue, "user_123")
 	storageMock.AssertCalled(t, "AddUserToSearchQueue", "user_123")
+}
+
+func TestMatcherBlock_Integration(t *testing.T) {
+	// Arrange
+	storageMock := new(MockStorage)
+	hub := chathub.NewManagerService(storageMock)
+	matcher := chathub.NewMatcherService(hub, storageMock)
+
+	// Create two mock clients
+	clientA := newMockClient("user_A")
+	clientB := newMockClient("user_B")
+	hub.Clients["user_A"] = clientA
+	hub.Clients["user_B"] = clientB
+
+	// User A has blocked user B
+	userA := &models.User{ID: "user_A", BlockedUsers: []string{"user_B"}}
+	userB := &models.User{ID: "user_B"}
+
+	storageMock.On("GetUsersByIDs", mock.AnythingOfType("[]string")).Return([]*models.User{userA, userB}, nil)
+	storageMock.On("SaveRoom", mock.AnythingOfType("*models.ChatRoom")).Return(nil).Maybe()
+	storageMock.On("RemoveUserFromSearchQueue", mock.AnythingOfType("string")).Return(nil).Maybe()
+
+	// Act
+	matcher.Queue["user_A"] = models.SearchRequest{UserID: "user_A"}
+	matcher.Queue["user_B"] = models.SearchRequest{UserID: "user_B"}
+	matcher.FindMatch(models.SearchRequest{UserID: "user_A"})
+
+	// Assert
+	// No match should be found, so clients should not have a room ID
+	assert.Empty(t, clientA.GetRoomID())
+	assert.Empty(t, clientB.GetRoomID())
+
+	// Queue should still contain both users
+	assert.Contains(t, matcher.Queue, "user_A")
+	assert.Contains(t, matcher.Queue, "user_B")
 }

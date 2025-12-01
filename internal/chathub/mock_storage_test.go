@@ -172,6 +172,21 @@ func (m *MockStorage) GetUserByID(userID string) (*models.User, error) {
 	return args.Get(0).(*models.User), args.Error(1)
 }
 
+func (m *MockStorage) GetUsersByIDs(userIDs []string) ([]*models.User, error) {
+	args := m.Called(userIDs)
+	return args.Get(0).([]*models.User), args.Error(1)
+}
+
+func (m *MockStorage) BlockUser(blockerUserID, blockedUserID string) error {
+	args := m.Called(blockerUserID, blockedUserID)
+	return args.Error(0)
+}
+
+func (m *MockStorage) UnblockUser(blockerUserID, blockedUserID string) error {
+	args := m.Called(blockerUserID, blockedUserID)
+	return args.Error(0)
+}
+
 func (m *MockStorage) UpdateUserLanguage(telegramID int64, languageCode string) error {
 	args := m.Called(telegramID, languageCode)
 	return args.Error(0)

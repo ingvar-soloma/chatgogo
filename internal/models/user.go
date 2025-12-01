@@ -17,6 +17,7 @@ type User struct {
 	RatingScore         int            // Rating score given by chat partners
 	DefaultMediaSpoiler bool           `gorm:"default:true"` // User preference: if true, media sent by this user will have spoiler flag by default
 	Language            string         `gorm:"default:'en'"` // User's interface language
+	BlockedUsers        pq.StringArray `gorm:"type:text[]"`    // Users that this user has blocked
 }
 
 // BeforeCreate is a GORM hook that is called before a record is created.
