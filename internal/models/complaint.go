@@ -13,8 +13,10 @@ type Complaint struct {
 	RoomID string `gorm:"type:uuid;not null;index"`
 	// ReporterID is the anonymous ID of the user who filed the complaint.
 	ReporterID string `gorm:"type:text;not null"`
-	// SuspectID is the anonymous ID of the user being reported.
-	SuspectID string `gorm:"type:text;not null;index"`
+	// ReportedUserID is the anonymous ID of the user being reported.
+	ReportedUserID string `gorm:"type:text;not null;index"`
+	// ComplaintType categorizes the complaint (e.g., 'Low', 'Medium', 'Critical').
+	ComplaintType string `gorm:"type:text;not null"`
 	// LoggedMessages contains a log of the chat messages relevant to the complaint.
 	// This is typically stored as a JSON string.
 	LoggedMessages string `gorm:"type:text"`

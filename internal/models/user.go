@@ -15,6 +15,11 @@ type User struct {
 	Gender              string         // User's gender
 	Interests           pq.StringArray `gorm:"type:text[]"` // Used for storing tags/interests
 	RatingScore         int            // Rating score given by chat partners
+	ReputationScore     int            `gorm:"default:1000"` // Reputation score affected by complaints
+	IsBlocked           bool           `gorm:"default:false"`
+	BlockEndTime        int64          `gorm:"default:0"`
+	BlockLevel          int            `gorm:"default:0"`
+	LastBanDate         int64          `gorm:"default:0"`
 	DefaultMediaSpoiler bool           `gorm:"default:true"` // User preference: if true, media sent by this user will have spoiler flag by default
 	Language            string         `gorm:"default:'en'"` // User's interface language
 }

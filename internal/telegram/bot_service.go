@@ -5,6 +5,7 @@ package telegram
 
 import (
 	"chatgogo/backend/internal/chathub"
+	"chatgogo/backend/internal/complaint"
 	"chatgogo/backend/internal/localization"
 	"chatgogo/backend/internal/models"
 	"chatgogo/backend/internal/storage"
@@ -12,16 +13,20 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 // BotService is responsible for receiving Telegram updates and routing them to the hub.
 type BotService struct {
-	BotAPI    *tgbotapi.BotAPI
-	Hub       *chathub.ManagerService
-	Storage   storage.Storage
-	Localizer *localization.Localizer
+	BotAPI          *tgbotapi.BotAPI
+	Hub             *chathub.ManagerService
+	Storage         storage.Storage
+	Localizer       *localization.Localizer
+	ComplaintSvc    *complaint.Service
+	userStates      map[int64]string
+	complaintBuffer map[int64]*models.Complaint
 }
 
 // NewBotService creates a new BotService instance.
@@ -38,7 +43,17 @@ func NewBotService(token string, hub *chathub.ManagerService, s storage.Storage)
 		return nil, fmt.Errorf("failed to create localizer: %w", err)
 	}
 
-	return &BotService{BotAPI: bot, Hub: hub, Storage: s, Localizer: localizer}, nil
+	complaintSvc := complaint.NewService(s)
+
+	return &BotService{
+		BotAPI:          bot,
+		Hub:             hub,
+		Storage:         s,
+		Localizer:       localizer,
+		ComplaintSvc:    complaintSvc,
+		userStates:      make(map[int64]string),
+		complaintBuffer: make(map[int64]*models.Complaint),
+	}, nil
 }
 
 // extractMessageContent uniformly extracts text or a caption from a message.
@@ -169,9 +184,37 @@ func (s *BotService) handleEditedMessage(msg *tgbotapi.Message) {
 
 // handleIncomingMessage processes new messages from users.
 func (s *BotService) handleIncomingMessage(msg *tgbotapi.Message) {
+	user, err := s.Storage.GetUserByTelegramID(msg.Chat.ID)
+	if err != nil {
+		log.Printf("Error getting user by telegram id: %v", err)
+		return
+	}
+	if user.IsBlocked && user.BlockEndTime > 0 {
+		if user.BlockEndTime > time.Now().Unix() {
+			// User is currently blocked
+			remainingTime := time.Unix(user.BlockEndTime, 0).Sub(time.Now())
+			reply := tgbotapi.NewMessage(msg.Chat.ID, fmt.Sprintf("You are currently blocked. Time remaining: %v", remainingTime))
+			s.BotAPI.Send(reply)
+			return
+		} else {
+			// Block has expired
+			user.IsBlocked = false
+			user.BlockEndTime = 0
+			s.Storage.UpdateUser(user)
+			s.Storage.UpdateUserReputation(user.ID, 100)
+		}
+	}
 	c := s.getOrCreateClient(msg.Chat.ID)
 	if c == nil {
 		return
+	}
+
+	if state, ok := s.userStates[msg.Chat.ID]; ok {
+		switch state {
+		case "awaiting_report_reason":
+			s.handleReportReason(msg)
+			return
+		}
 	}
 
 	tempID := uint(msg.MessageID)
@@ -191,7 +234,7 @@ func (s *BotService) handleIncomingMessage(msg *tgbotapi.Message) {
 	switch {
 	case msg.Text != "":
 		chatMsg.Content = msg.Text
-		s.handleTextMessage(&chatMsg)
+		s.handleTextMessage(msg, &chatMsg)
 	case msg.Photo != nil:
 		largestPhoto := msg.Photo[len(msg.Photo)-1]
 		chatMsg.Type = "photo"
@@ -243,7 +286,7 @@ func (s *BotService) handleIncomingMessage(msg *tgbotapi.Message) {
 }
 
 // handleTextMessage processes text messages and commands.
-func (s *BotService) handleTextMessage(chatMsg *models.ChatMessage) {
+func (s *BotService) handleTextMessage(msg *tgbotapi.Message, chatMsg *models.ChatMessage) {
 	chatMsg.Type = "text"
 	if !strings.HasPrefix(chatMsg.Content, "/") {
 		return
@@ -263,9 +306,76 @@ func (s *BotService) handleTextMessage(chatMsg *models.ChatMessage) {
 		chatMsg.Type = "command_settings"
 	case "report":
 		chatMsg.Type = "command_report"
+		s.handleReportCommand(msg)
 	default:
 		chatMsg.Type = "unknown_command"
 	}
+}
+
+func (s *BotService) handleReportCommand(msg *tgbotapi.Message) {
+	c := s.getOrCreateClient(msg.Chat.ID)
+	if c.GetRoomID() == "" {
+		reply := tgbotapi.NewMessage(msg.Chat.ID, "You can only report a user while in a chat.")
+		s.BotAPI.Send(reply)
+		return
+	}
+
+	room, err := s.Storage.GetRoomByID(c.GetRoomID())
+	if err != nil {
+		log.Printf("Error getting room by id: %v", err)
+		return
+	}
+	var partnerID string
+	if c.GetUserID() == room.User1ID {
+		partnerID = room.User2ID
+	} else {
+		partnerID = room.User1ID
+	}
+	s.complaintBuffer[msg.Chat.ID] = &models.Complaint{
+		RoomID:         c.GetRoomID(),
+		ReporterID:     c.GetUserID(),
+		ReportedUserID: partnerID,
+	}
+
+	reply := tgbotapi.NewMessage(msg.Chat.ID, "Please select a reason for your report:")
+	reply.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Light Spam", "report_Low"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Insults", "report_Medium"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Hate Speech", "report_Critical"),
+		),
+	)
+	s.BotAPI.Send(reply)
+}
+
+func (s *BotService) handleReportReason(msg *tgbotapi.Message) {
+	s.submitReport(msg.Chat.ID, msg.Text)
+}
+
+func (s *BotService) submitReport(chatID int64, reason string) {
+	complaint, ok := s.complaintBuffer[chatID]
+	if !ok {
+		// Should not happen
+		return
+	}
+	complaint.Reason = reason
+	if err := s.Storage.SaveComplaint(complaint); err != nil {
+		log.Printf("Error saving complaint: %v", err)
+		return
+	}
+	if err := s.ComplaintSvc.HandleComplaint(complaint); err != nil {
+		log.Printf("Error handling complaint: %v", err)
+	}
+
+	delete(s.userStates, chatID)
+	delete(s.complaintBuffer, chatID)
+
+	reply := tgbotapi.NewMessage(chatID, "Your report has been submitted.")
+	s.BotAPI.Send(reply)
 }
 
 // handleLanguageCommand sends a message with a keyboard to choose a language.
@@ -351,24 +461,37 @@ func (s *BotService) handleCallbackQuery(callbackQuery *tgbotapi.CallbackQuery) 
 		log.Printf("failed to send callback response: %v", err)
 	}
 
-	// Extract language code from data
-	langCode := strings.TrimPrefix(callbackQuery.Data, "set_lang_")
 	chatID := callbackQuery.Message.Chat.ID
 
-	// Update user's language in the database
-	err := s.Storage.UpdateUserLanguage(chatID, langCode)
-	if err != nil {
-		log.Printf("failed to update user language: %v", err)
-		return
-	}
+	if strings.HasPrefix(callbackQuery.Data, "set_lang_") {
+		// Extract language code from data
+		langCode := strings.TrimPrefix(callbackQuery.Data, "set_lang_")
 
-	// Send a confirmation message
-	user, err := s.Storage.GetUserByTelegramID(chatID)
-	if err != nil {
-		log.Printf("Error getting user by telegram id: %v", err)
-		return
-	}
+		// Update user's language in the database
+		err := s.Storage.UpdateUserLanguage(chatID, langCode)
+		if err != nil {
+			log.Printf("failed to update user language: %v", err)
+			return
+		}
 
-	msg := tgbotapi.NewMessage(chatID, s.Localizer.GetString(user.Language, "language_changed"))
-	s.BotAPI.Send(msg)
+		// Send a confirmation message
+		user, err := s.Storage.GetUserByTelegramID(chatID)
+		if err != nil {
+			log.Printf("Error getting user by telegram id: %v", err)
+			return
+		}
+
+		msg := tgbotapi.NewMessage(chatID, s.Localizer.GetString(user.Language, "language_changed"))
+		s.BotAPI.Send(msg)
+	} else if strings.HasPrefix(callbackQuery.Data, "report_") {
+		complaintType := strings.TrimPrefix(callbackQuery.Data, "report_")
+		complaint, ok := s.complaintBuffer[chatID]
+		if !ok {
+			return
+		}
+		complaint.ComplaintType = complaintType
+		s.userStates[chatID] = "awaiting_report_reason"
+		reply := tgbotapi.NewMessage(chatID, "Please provide a reason for your report.")
+		s.BotAPI.Send(reply)
+	}
 }
