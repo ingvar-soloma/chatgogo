@@ -194,6 +194,10 @@ func (s *BotService) handleTextMessage(chatMsg *models.ChatMessage) {
 		chatMsg.Type = "command_settings"
 	case "report":
 		chatMsg.Type = "command_report"
+	case "block":
+		chatMsg.Type = "command_block"
+	case "unblock":
+		chatMsg.Type = "command_unblock"
 	case "profile":
 		// We need to handle this differently because we don't have the chatID here directly in a convenient way
 		// if we want to call handleProfileCommand.
@@ -301,19 +305,38 @@ func (s *BotService) handleCallbackQuery(callbackQuery *tgbotapi.CallbackQuery) 
 		log.Printf("failed to send callback response: %v", err)
 	}
 
+	chatID := callbackQuery.Message.Chat.ID
+	user, err := s.Storage.GetUserByTelegramID(chatID)
+	if err != nil {
+		log.Printf("Error getting user by telegram id: %v", err)
+		return
+	}
+
+	if strings.HasPrefix(callbackQuery.Data, "unblock_") {
+		blockedUserID := strings.TrimPrefix(callbackQuery.Data, "unblock_")
+		err := s.Storage.UnblockUser(user.ID, blockedUserID)
+		if err != nil {
+			log.Printf("Error unblocking user: %v", err)
+			return
+		}
+
+		msg := tgbotapi.NewMessage(chatID, s.Localizer.GetString(user.Language, "user_unblocked"))
+		s.BotAPI.Send(msg)
+		return
+	}
+
 	// Extract language code from data
 	langCode := strings.TrimPrefix(callbackQuery.Data, "set_lang_")
-	chatID := callbackQuery.Message.Chat.ID
 
 	// Update user's language in the database
-	err := s.Storage.UpdateUserLanguage(chatID, langCode)
+	err = s.Storage.UpdateUserLanguage(chatID, langCode)
 	if err != nil {
 		log.Printf("failed to update user language: %v", err)
 		return
 	}
 
 	// Send a confirmation message
-	user, err := s.Storage.GetUserByTelegramID(chatID)
+	user, err = s.Storage.GetUserByTelegramID(chatID)
 	if err != nil {
 		log.Printf("Error getting user by telegram id: %v", err)
 		return
@@ -420,6 +443,86 @@ func (s *BotService) handleProfileCallback(callbackQuery *tgbotapi.CallbackQuery
 	}
 }
 
+// handleBlockCommand handles the /block command.
+func (s *BotService) handleBlockCommand(chatID int64) {
+	user, err := s.Storage.GetUserByTelegramID(chatID)
+	if err != nil {
+		log.Printf("Error getting user by telegram id: %v", err)
+		return
+	}
+
+	roomID, err := s.Storage.GetActiveRoomIDForUser(user.ID)
+	if err != nil {
+		log.Printf("Error getting active room: %v", err)
+		// Fall through to check for last partner
+	}
+
+	var partnerID string
+	if roomID != "" {
+		room, err := s.Storage.GetRoomByID(roomID)
+		if err != nil {
+			log.Printf("Error getting room by id: %v", err)
+			return
+		}
+
+		if room.User1ID == user.ID {
+			partnerID = room.User2ID
+		} else {
+			partnerID = room.User1ID
+		}
+	} else {
+		lastPartnerID, err := s.Storage.GetUserAttribute(user.ID, "last_partner_id")
+		if err != nil || lastPartnerID == "" {
+			msg := tgbotapi.NewMessage(chatID, s.Localizer.GetString(user.Language, "no_one_to_block"))
+			s.BotAPI.Send(msg)
+			return
+		}
+		partnerID = lastPartnerID
+	}
+
+	err = s.Storage.BlockUser(user.ID, partnerID)
+	if err != nil {
+		log.Printf("Error blocking user: %v", err)
+		return
+	}
+
+	msg := tgbotapi.NewMessage(chatID, s.Localizer.GetString(user.Language, "user_blocked"))
+	s.BotAPI.Send(msg)
+
+	// Disconnect the chat
+	s.Hub.IncomingCh <- models.ChatMessage{
+		SenderID: user.ID,
+		RoomID:   roomID,
+		Type:     "command_stop",
+	}
+}
+
+// handleUnblockCommand handles the /unblock command.
+func (s *BotService) handleUnblockCommand(chatID int64) {
+	user, err := s.Storage.GetUserByTelegramID(chatID)
+	if err != nil {
+		log.Printf("Error getting user by telegram id: %v", err)
+		return
+	}
+
+	if len(user.BlockedUsers) == 0 {
+		msg := tgbotapi.NewMessage(chatID, s.Localizer.GetString(user.Language, "no_blocked_users"))
+		s.BotAPI.Send(msg)
+		return
+	}
+
+	var buttons [][]tgbotapi.InlineKeyboardButton
+	for i, blockedUserID := range user.BlockedUsers {
+		buttons = append(buttons, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(fmt.Sprintf("Blocked User %d", i+1), fmt.Sprintf("unblock_%s", blockedUserID)),
+		))
+	}
+
+	msg := tgbotapi.NewMessage(chatID, s.Localizer.GetString(user.Language, "select_user_to_unblock"))
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(buttons...)
+	s.BotAPI.Send(msg)
+}
+
 func (s *BotService) handleIncomingMessage(msg *tgbotapi.Message) {
 	c := s.getOrCreateClient(msg.Chat.ID)
 	if c == nil {
@@ -498,6 +601,12 @@ func (s *BotService) handleIncomingMessage(msg *tgbotapi.Message) {
 		switch chatMsg.Type {
 		case "command_profile":
 			s.handleProfileCommand(msg.Chat.ID)
+			return
+		case "command_block":
+			s.handleBlockCommand(msg.Chat.ID)
+			return
+		case "command_unblock":
+			s.handleUnblockCommand(msg.Chat.ID)
 			return
 		default:
 			s.Hub.IncomingCh <- chatMsg

@@ -21,6 +21,7 @@ type Storage interface {
 	SaveUser(user *models.User) error
 	SaveUserIfNotExists(telegramID int64) (*models.User, error)
 	GetUserByTelegramID(telegramID int64) (*models.User, error)
+	GetUsersByIDs(userIDs []string) ([]*models.User, error)
 	IsUserBanned(anonID string) (bool, error)
 	UpdateUserMediaSpoiler(userID string, value bool) error
 	UpdateUserAge(userID string, age int) error
@@ -66,6 +67,8 @@ type Storage interface {
 
 	// User settings
 	UpdateUserLanguage(telegramID int64, languageCode string) error
+	BlockUser(blockerUserID, blockedUserID string) error
+	UnblockUser(blockerUserID, blockedUserID string) error
 }
 
 // Service provides the implementation of the Storage interface,
@@ -356,6 +359,14 @@ func (s *Service) SaveUserIfNotExists(telegramID int64) (*models.User, error) {
 	return &user, nil
 }
 
+func (s *Service) GetUsersByIDs(userIDs []string) ([]*models.User, error) {
+	var users []*models.User
+	if err := s.DB.Where("id IN ?", userIDs).Find(&users).Error; err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
 // UpdateUserLanguage updates the user's language preference.
 func (s *Service) UpdateUserLanguage(telegramID int64, languageCode string) error {
 	return s.DB.Model(&models.User{}).
@@ -478,4 +489,14 @@ func (s *Service) GetUserAttribute(userID string, key string) (string, error) {
 func (s *Service) DeleteUserAttribute(userID string, key string) error {
 	redisKey := "user_attr:" + userID + ":" + key
 	return s.Redis.Del(s.Ctx, redisKey).Err()
+}
+
+// BlockUser adds a user to another user's block list.
+func (s *Service) BlockUser(blockerUserID, blockedUserID string) error {
+	return s.DB.Exec("UPDATE users SET blocked_users = array_append(blocked_users, ?) WHERE id = ?", blockedUserID, blockerUserID).Error
+}
+
+// UnblockUser removes a user from another user's block list.
+func (s *Service) UnblockUser(blockerUserID, blockedUserID string) error {
+	return s.DB.Exec("UPDATE users SET blocked_users = array_remove(blocked_users, ?) WHERE id = ?", blockedUserID, blockerUserID).Error
 }

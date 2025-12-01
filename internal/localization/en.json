@@ -24,5 +24,10 @@
   "gender_female": "Female",
   "profile_updated": "✅ Profile updated successfully!",
   "invalid_age": "❌ Invalid age. Please enter a number between 10 and 100.",
-  "invalid_interests": "❌ Invalid interests. Please enter at least one interest."
+  "invalid_interests": "❌ Invalid interests. Please enter at least one interest.",
+  "user_blocked": "User has been blocked.",
+  "no_one_to_block": "There is no one to block.",
+  "no_blocked_users": "You have no blocked users.",
+  "select_user_to_unblock": "Select a user to unblock:",
+  "user_unblocked": "User has been unblocked."
 }

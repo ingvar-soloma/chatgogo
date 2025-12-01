@@ -87,15 +87,49 @@ func (m *MatcherService) AddUserToQueue(req models.SearchRequest) {
 
 // FindMatch attempts to find a chat partner for the given search request.
 func (m *MatcherService) FindMatch(req models.SearchRequest) {
+	// Collect all user IDs from the queue.
+	userIDs := make([]string, 0, len(m.Queue))
+	for id := range m.Queue {
+		userIDs = append(userIDs, id)
+	}
+
+	// Fetch all users from the database in a single query.
+	users, err := m.Storage.GetUsersByIDs(userIDs)
+	if err != nil {
+		log.Printf("Error getting users by IDs: %v", err)
+		return
+	}
+
+	// Create a map for quick lookups.
+	userMap := make(map[string]*models.User)
+	for _, user := range users {
+		userMap[user.ID] = user
+	}
+
+	user1 := userMap[req.UserID]
+
 	// Iterate through the queue to find a potential match.
+OuterLoop:
 	for targetID := range m.Queue {
 		if targetID == req.UserID {
 			continue // Don't match a user with themselves.
 		}
 
-		// In a real-world scenario, this is where you would implement
-		// more complex matching logic based on user preferences, age, gender, etc.
-		// For now, we'll match any two users.
+		user2 := userMap[targetID]
+
+		// Check if user1 has blocked user2
+		for _, blockedID := range user1.BlockedUsers {
+			if blockedID == user2.ID {
+				continue OuterLoop
+			}
+		}
+
+		// Check if user2 has blocked user1
+		for _, blockedID := range user2.BlockedUsers {
+			if blockedID == user1.ID {
+				continue OuterLoop
+			}
+		}
 
 		m.createRoomForMatch(req.UserID, targetID)
 		return
