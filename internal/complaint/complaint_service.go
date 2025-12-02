@@ -22,8 +22,32 @@ func NewService(s storage.Storage) *Service {
 
 // HandleComplaint processes a new complaint.
 func (s *Service) HandleComplaint(complaint *models.Complaint) error {
-	weight := analysis.GetWeight(complaint.ComplaintType)
-	if err := s.Storage.UpdateUserReputation(complaint.ReportedUserID, -weight); err != nil {
+	// Check if this is the first complaint against the user in this chat room
+	existingComplaints, err := s.Storage.GetComplaintsByRoomAndReportedUser(complaint.RoomID, complaint.ReportedUserID)
+	if err != nil {
+		return err
+	}
+	if len(existingComplaints) > 1 {
+		// Not the first complaint, so don't apply a penalty
+		return nil
+	}
+
+	// Check for recent complaints from the same reporter to apply diminishing penalty
+	recentComplaints, err := s.Storage.GetComplaintsByReporterSince(complaint.ReporterID, time.Now().Add(-1*time.Hour))
+	if err != nil {
+		return err
+	}
+
+	weight := float64(analysis.GetWeight(complaint.ComplaintType))
+	for i := 0; i < len(recentComplaints); i++ {
+		weight *= 0.75
+	}
+	finalWeight := int(weight)
+	if finalWeight < 1 {
+		finalWeight = 1
+	}
+
+	if err := s.Storage.UpdateUserReputation(complaint.ReportedUserID, -finalWeight); err != nil {
 		return err
 	}
 

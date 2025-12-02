@@ -20,17 +20,5 @@
   "report_provide_reason": "Please provide a reason for your report.",
   "report_submitted": "Your report has been submitted.",
   "report_not_in_chat": "You can only report a user while in a chat.",
-  "user_blocked": "You are currently blocked. Time remaining: %v"
-  "profile_view": "👤 **Your Profile**\n\n🎂 Age: %d\n⚧ Gender: %s\n🏷 Interests: %s\n⭐ Rating: %d",
-  "btn_edit_age": "🎂 Edit Age",
-  "btn_edit_gender": "⚧ Edit Gender",
-  "btn_edit_interests": "🏷 Edit Interests",
-  "prompt_age": "Please enter your age (10-100):",
-  "prompt_interests": "Please enter your interests separated by commas (e.g. coding, music, travel):",
-  "choose_gender": "Please choose your gender:",
-  "gender_male": "Male",
-  "gender_female": "Female",
-  "profile_updated": "✅ Profile updated successfully!",
-  "invalid_age": "❌ Invalid age. Please enter a number between 10 and 100.",
-  "invalid_interests": "❌ Invalid interests. Please enter at least one interest."
+  "user_blocked": "You are currently blocked. Time remaining: %s"
 }
