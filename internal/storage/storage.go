@@ -10,6 +10,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/lib/pq"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -27,6 +28,19 @@ type Storage interface {
 	GetUserByTelegramID(telegramID int64) (*models.User, error)
 	IsUserBanned(anonID string) (bool, error)
 	UpdateUserMediaSpoiler(userID string, value bool) error
+	UpdateUserAge(userID string, age int) error
+	UpdateUserGender(userID string, gender string) error
+	UpdateUserInterests(userID string, interests []string) error
+
+	// User State Management (Redis)
+	SetUserState(userID string, state string) error
+	GetUserState(userID string) (string, error)
+	ClearUserState(userID string) error
+
+	// Generic User Attributes (Redis) - for transient data like message IDs
+	SetUserAttribute(userID string, key string, value string) error
+	GetUserAttribute(userID string, key string) (string, error)
+	DeleteUserAttribute(userID string, key string) error
 
 	// Room operations
 	SaveRoom(room *models.ChatRoom) error
@@ -456,4 +470,75 @@ func (s *Service) GetUserByID(userID string) (*models.User, error) {
 		return nil, err
 	}
 	return &user, nil
+}
+
+// UpdateUserAge updates the user's age.
+func (s *Service) UpdateUserAge(userID string, age int) error {
+	return s.DB.Model(&models.User{}).
+		Where("id = ?", userID).
+		Update("age", age).Error
+}
+
+// UpdateUserGender updates the user's gender.
+func (s *Service) UpdateUserGender(userID string, gender string) error {
+	return s.DB.Model(&models.User{}).
+		Where("id = ?", userID).
+		Update("gender", gender).Error
+}
+
+// UpdateUserInterests updates the user's interests.
+func (s *Service) UpdateUserInterests(userID string, interests []string) error {
+	return s.DB.Model(&models.User{}).
+		Where("id = ?", userID).
+		Update("interests", pq.StringArray(interests)).Error
+}
+
+// SetUserState sets the user's current state in Redis.
+func (s *Service) SetUserState(userID string, state string) error {
+	key := "user_state:" + userID
+	return s.Redis.Set(s.Ctx, key, state, 0).Err() // 0 means no expiration, or set a reasonable timeout
+}
+
+// GetUserState retrieves the user's current state from Redis.
+func (s *Service) GetUserState(userID string) (string, error) {
+	key := "user_state:" + userID
+	state, err := s.Redis.Get(s.Ctx, key).Result()
+	if errors.Is(err, redis.Nil) {
+		return "", nil // No state set
+	}
+	if err != nil {
+		return "", err
+	}
+	return state, nil
+}
+
+// ClearUserState removes the user's state from Redis.
+func (s *Service) ClearUserState(userID string) error {
+	key := "user_state:" + userID
+	return s.Redis.Del(s.Ctx, key).Err()
+}
+
+// SetUserAttribute sets a generic attribute for a user in Redis.
+func (s *Service) SetUserAttribute(userID string, key string, value string) error {
+	redisKey := "user_attr:" + userID + ":" + key
+	return s.Redis.Set(s.Ctx, redisKey, value, 0).Err()
+}
+
+// GetUserAttribute retrieves a generic attribute for a user from Redis.
+func (s *Service) GetUserAttribute(userID string, key string) (string, error) {
+	redisKey := "user_attr:" + userID + ":" + key
+	val, err := s.Redis.Get(s.Ctx, redisKey).Result()
+	if errors.Is(err, redis.Nil) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return val, nil
+}
+
+// DeleteUserAttribute removes a generic attribute for a user from Redis.
+func (s *Service) DeleteUserAttribute(userID string, key string) error {
+	redisKey := "user_attr:" + userID + ":" + key
+	return s.Redis.Del(s.Ctx, redisKey).Err()
 }

@@ -13,10 +13,16 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+)
+
+const (
+	StateWaitingForAge       = "waiting_for_age"
+	StateWaitingForInterests = "waiting_for_interests"
 )
 
 // BotService is responsible for receiving Telegram updates and routing them to the hub.
@@ -308,6 +314,18 @@ func (s *BotService) handleTextMessage(msg *tgbotapi.Message, chatMsg *models.Ch
 	case "report":
 		chatMsg.Type = "command_report"
 		s.handleReportCommand(msg)
+	case "profile":
+		// We need to handle this differently because we don't have the chatID here directly in a convenient way
+		// if we want to call handleProfileCommand.
+		// However, handleIncomingMessage calls this.
+		// Let's adjust handleIncomingMessage to handle commands that don't need to go to the hub.
+		// Actually, for now, let's just mark it as command_profile and handle it in the switch in handleIncomingMessage?
+		// No, handleTextMessage is called by handleIncomingMessage.
+		// Let's just return here and let the caller handle it?
+		// Or better, let's pass the bot service reference or just handle it here if we can.
+		// But we don't have the chatID easily accessible as int64 here, only as string in SenderID? No.
+		// The caller has msg.Chat.ID.
+		chatMsg.Type = "command_profile"
 	default:
 		chatMsg.Type = "unknown_command"
 	}
@@ -452,11 +470,18 @@ func (s *BotService) Run() {
 				case "spoiler_on", "spoiler_off":
 					HandleSpoilerCommand(context.Background(), &update, s.Storage, s.BotAPI)
 					continue
+				case "profile":
+					s.handleProfileCommand(update.Message.Chat.ID)
+					continue
 				}
 			}
 			s.handleIncomingMessage(update.Message)
 		case update.CallbackQuery != nil:
-			s.handleCallbackQuery(update.CallbackQuery)
+			if strings.HasPrefix(update.CallbackQuery.Data, "edit_") || strings.HasPrefix(update.CallbackQuery.Data, "set_gender_") {
+				s.handleProfileCallback(update.CallbackQuery)
+			} else {
+				s.handleCallbackQuery(update.CallbackQuery)
+			}
 		}
 	}
 }
@@ -501,4 +526,207 @@ func (s *BotService) handleCallbackQuery(callbackQuery *tgbotapi.CallbackQuery) 
 		reply := tgbotapi.NewMessage(chatID, "Please provide a reason for your report.")
 		s.BotAPI.Send(reply)
 	}
+}
+
+// handleProfileCommand sends the user's profile information and edit options.
+func (s *BotService) handleProfileCommand(chatID int64) {
+	user, err := s.Storage.GetUserByTelegramID(chatID)
+	if err != nil {
+		log.Printf("Error getting user by telegram id: %v", err)
+		return
+	}
+
+	// Format interests
+	interestsStr := "None"
+	if len(user.Interests) > 0 {
+		interestsStr = strings.Join(user.Interests, ", ")
+	}
+
+	// Format gender
+	genderStr := "Not specified"
+	if user.Gender != "" {
+		if user.Gender == "male" {
+			genderStr = s.Localizer.GetString(user.Language, "gender_male")
+		} else if user.Gender == "female" {
+			genderStr = s.Localizer.GetString(user.Language, "gender_female")
+		} else {
+			genderStr = user.Gender
+		}
+	}
+
+	profileText := fmt.Sprintf(s.Localizer.GetString(user.Language, "profile_view"),
+		user.Age, genderStr, interestsStr, user.RatingScore)
+
+	msg := tgbotapi.NewMessage(chatID, profileText)
+	msg.ParseMode = tgbotapi.ModeMarkdown
+
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(s.Localizer.GetString(user.Language, "btn_edit_age"), "edit_age"),
+			tgbotapi.NewInlineKeyboardButtonData(s.Localizer.GetString(user.Language, "btn_edit_gender"), "edit_gender"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(s.Localizer.GetString(user.Language, "btn_edit_interests"), "edit_interests"),
+		),
+	)
+}
+
+// deleteMessage deletes a message from the chat.
+func (s *BotService) deleteMessage(chatID int64, messageID int) {
+	deleteMsg := tgbotapi.NewDeleteMessage(chatID, messageID)
+	if _, err := s.BotAPI.Request(deleteMsg); err != nil {
+		log.Printf("Failed to delete message %d in chat %d: %v", messageID, chatID, err)
+	}
+}
+
+// handleProfileCallback handles callback queries related to profile editing.
+func (s *BotService) handleProfileCallback(callbackQuery *tgbotapi.CallbackQuery) {
+	chatID := callbackQuery.Message.Chat.ID
+	user, err := s.Storage.GetUserByTelegramID(chatID)
+	if err != nil {
+		log.Printf("Error getting user: %v", err)
+		return
+	}
+
+	// Answer the callback query to stop the loading animation
+	callback := tgbotapi.NewCallback(callbackQuery.ID, "")
+	s.BotAPI.Request(callback)
+
+	switch callbackQuery.Data {
+	case "edit_age":
+		s.Storage.SetUserState(user.ID, StateWaitingForAge)
+		msg := tgbotapi.NewMessage(chatID, s.Localizer.GetString(user.Language, "prompt_age"))
+		sentMsg, _ := s.BotAPI.Send(msg)
+		s.Storage.SetUserAttribute(user.ID, "last_prompt_msg_id", strconv.Itoa(sentMsg.MessageID))
+
+	case "edit_gender":
+		msg := tgbotapi.NewMessage(chatID, s.Localizer.GetString(user.Language, "choose_gender"))
+		msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData(s.Localizer.GetString(user.Language, "gender_male"), "set_gender_male"),
+				tgbotapi.NewInlineKeyboardButtonData(s.Localizer.GetString(user.Language, "gender_female"), "set_gender_female"),
+			),
+		)
+		s.BotAPI.Send(msg)
+
+	case "edit_interests":
+		s.Storage.SetUserState(user.ID, StateWaitingForInterests)
+		msg := tgbotapi.NewMessage(chatID, s.Localizer.GetString(user.Language, "prompt_interests"))
+		sentMsg, _ := s.BotAPI.Send(msg)
+		s.Storage.SetUserAttribute(user.ID, "last_prompt_msg_id", strconv.Itoa(sentMsg.MessageID))
+
+	case "set_gender_male":
+		s.Storage.UpdateUserGender(user.ID, "male")
+		s.handleProfileCommand(chatID)
+
+	case "set_gender_female":
+		s.Storage.UpdateUserGender(user.ID, "female")
+		s.handleProfileCommand(chatID)
+	}
+}
+
+func (s *BotService) handleIncomingMessage(msg *tgbotapi.Message) {
+	c := s.getOrCreateClient(msg.Chat.ID)
+	if c == nil {
+		return
+	}
+
+	// Fetch user to get language
+	user, err := s.Storage.GetUserByTelegramID(msg.Chat.ID)
+	if err != nil {
+		log.Printf("Error getting user: %v", err)
+		return
+	}
+
+	// Check for active user state (e.g. waiting for age/interests)
+	userState, err := s.Storage.GetUserState(c.UserID)
+	if err == nil && userState != "" {
+		// Delete user's input message
+		s.deleteMessage(msg.Chat.ID, msg.MessageID)
+
+		// Delete the previous prompt message
+		lastPromptIDStr, _ := s.Storage.GetUserAttribute(c.UserID, "last_prompt_msg_id")
+		if lastPromptIDStr != "" {
+			if lastPromptID, err := strconv.Atoi(lastPromptIDStr); err == nil {
+				s.deleteMessage(msg.Chat.ID, lastPromptID)
+			}
+			s.Storage.DeleteUserAttribute(c.UserID, "last_prompt_msg_id")
+		}
+
+		switch userState {
+		case StateWaitingForAge:
+			age, err := strconv.Atoi(msg.Text)
+			if err != nil || age < 10 || age > 100 {
+				errMsg := tgbotapi.NewMessage(msg.Chat.ID, s.Localizer.GetString(user.Language, "invalid_age"))
+				sentMsg, _ := s.BotAPI.Send(errMsg)
+				s.Storage.SetUserAttribute(c.UserID, "last_prompt_msg_id", strconv.Itoa(sentMsg.MessageID))
+				return
+			}
+			s.Storage.UpdateUserAge(c.UserID, age)
+			s.Storage.ClearUserState(c.UserID)
+			s.handleProfileCommand(msg.Chat.ID)
+			return
+
+		case StateWaitingForInterests:
+			interests := strings.Split(msg.Text, ",")
+			cleanInterests := make([]string, 0)
+			for _, i := range interests {
+				trimmed := strings.TrimSpace(i)
+				if trimmed != "" {
+					cleanInterests = append(cleanInterests, trimmed)
+				}
+			}
+
+			if len(cleanInterests) == 0 {
+				errMsg := tgbotapi.NewMessage(msg.Chat.ID, s.Localizer.GetString(user.Language, "invalid_interests"))
+				sentMsg, _ := s.BotAPI.Send(errMsg)
+				s.Storage.SetUserAttribute(c.UserID, "last_prompt_msg_id", strconv.Itoa(sentMsg.MessageID))
+				return
+			}
+
+			s.Storage.UpdateUserInterests(c.UserID, cleanInterests)
+			s.Storage.ClearUserState(c.UserID)
+			s.handleProfileCommand(msg.Chat.ID)
+			return
+		}
+	}
+
+	// Handle commands
+	if msg.IsCommand() {
+		chatMsg := models.ChatMessage{
+			SenderID: c.UserID,
+			RoomID:   c.RoomID,
+			Content:  msg.Text,
+			Type:     "text",
+		}
+		s.handleTextMessage(&chatMsg) // This will set chatMsg.Type to command_...
+		switch chatMsg.Type {
+		case "command_profile":
+			s.handleProfileCommand(msg.Chat.ID)
+			return
+		default:
+			s.Hub.IncomingCh <- chatMsg
+		}
+		return
+	}
+
+	// Handle regular messages
+	msgType, fileID, caption := s.extractMediaInfo(msg)
+
+	content := caption
+	metadata := ""
+	if msgType != "text" {
+		content = fileID
+		metadata = caption
+	}
+
+	chatMsg := models.ChatMessage{
+		SenderID: c.UserID,
+		RoomID:   c.RoomID,
+		Type:     msgType,
+		Content:  content,
+		Metadata: metadata,
+	}
+
+	s.Hub.IncomingCh <- chatMsg
 }
